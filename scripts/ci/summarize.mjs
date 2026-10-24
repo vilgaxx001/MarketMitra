@@ -50,12 +50,36 @@ export function render(s, meta = {}) {
   return L.join("\n") + "\n";
 }
 
+// Workflow-command escaping (https://docs.github.com/actions/reference/workflow-commands-for-github-actions): % \r \n must be encoded.
+export const escData = (v) => String(v).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+
+// Surfaces the recorded results as check-run ANNOTATIONS (readable through the Checks API without downloading the artifact).
+// Content is derived only from files the run produced; nothing is added that was not recorded. Used when CI_EMIT_ANNOTATIONS=1.
+export function annotations(s, meta = {}, dir = "") {
+  const out = [];
+  const env = (() => { try { return fs.readFileSync(path.join(dir, "environment.txt"), "utf8").trim(); } catch { return "environment.txt not found"; } })();
+  out.push(["pre5c-summary: environment", env]);
+  out.push(["pre5c-summary: gates", s.gates.map((g) => `${g.id}: ${g.status} (exit ${g.exit ?? "-"})`).join("\n")]);
+  const counts = [];
+  if (s.tests) counts.push(`vitest: ${s.tests.total} total, ${s.tests.passed} passed, ${s.tests.failed} failed, ${s.tests.failedSuites} failed files, ${s.tests.skipped} skipped, ${s.tests.todo} todo, success=${s.tests.success}`);
+  else counts.push("vitest: no vitest.json recorded");
+  if (s.http) counts.push(`http: ${s.http.total} checks, ${s.http.passed} passed, ${s.http.failed} failed`);
+  else counts.push("http: no http.json recorded");
+  out.push(["pre5c-summary: counts", counts.join("\n")]);
+  if (s.audit) {
+    out.push(["pre5c-summary: audit", [`production total: ${s.audit.prodTotal ?? "unknown"}; all total: ${s.audit.allTotal ?? "unknown"}; policy ok: ${s.audit.ok}`, ...(s.audit.problems ?? []).map((x) => `PROBLEM: ${x}`), ...(s.audit.deferred ?? []).map((d) => `deferred: ${d.name} (${d.severity})`)].join("\n")]);
+  } else out.push(["pre5c-summary: audit", "no audit-policy.json recorded"]);
+  out.push(["pre5c-summary: result", s.allPassed ? "every required gate recorded exit 0" : `NOT PASSED: ${s.bad.map((g) => `${g.id} (${g.status})`).join(", ") || "see counts"}${s.extra.length ? "; " + s.extra.join("; ") : ""}`]);
+  return out.map(([title, msg]) => `::notice title=${escData(title).replace(/:/g, "%3A").replace(/,/g, "%2C")}::${escData(msg)}`);
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const dir = process.env.CI_EVIDENCE_DIR; if (!dir) { console.error("CI_EVIDENCE_DIR is required"); process.exit(2); }
   const s = summarize(dir);
   const md = render(s, { digest: process.env.CI_SOURCE_DIGEST, commit: process.env.GITHUB_SHA, run: process.env.GITHUB_RUN_ID && `${process.env.GITHUB_RUN_ID}/${process.env.GITHUB_RUN_ATTEMPT ?? 1}`, node: process.version });
   fs.writeFileSync(path.join(dir, "SUMMARY.md"), md); fs.writeFileSync(path.join(dir, "summary.json"), JSON.stringify(s, null, 1));
   console.log(md);
+  if (process.env.CI_EMIT_ANNOTATIONS === "1") for (const a of annotations(s, {}, dir)) console.log(a);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
   process.exit(s.allPassed ? 0 : 1);
 }

@@ -210,8 +210,9 @@ jobs:
             rm -f "$RUNNER_TEMP/mm-ci/server.raw.log"
           fi
           [ -d node_modules ] && [ -d scripts/migration-verification/node_modules ] && node scripts/ci/db.mjs drop mm_ci_fresh mm_ci_shadow mm_ci_existing || echo "database cleanup skipped (harness not installed); the service container is destroyed with the job anyway"
+          # CI_EMIT_ANNOTATIONS also prints the recorded results as check-run annotations (readable via the Checks API).
           # Propagates the summary's exit code: the job cannot end green unless every required gate recorded exit 0.
-          node scripts/ci/summarize.mjs
+          CI_EMIT_ANNOTATIONS=1 node scripts/ci/summarize.mjs
 
       - name: Upload evidence artifact (redacted logs, JSON results, summary)
         if: always()

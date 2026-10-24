@@ -188,3 +188,19 @@ describe("workflow artifact upload", () => {
     expect(step).toMatch(/\n\s+if-no-files-found:\s*error/);
   });
 });
+
+describe("summarize.mjs annotations()", () => {
+  it("encodes workflow-command metacharacters and reports only recorded facts", async () => {
+    const { escData, annotations } = await load("scripts/ci/summarize.mjs");
+    expect(escData("a%b\r\nc")).toBe("a%25b%0D%0Ac");
+    const s = { gates: [{ id: "tsc", status: "FAIL", exit: 2 }], tests: null, http: null, audit: { prodTotal: 1, allTotal: 1, ok: false, problems: ["next (critical)"], deferred: [] }, extra: [], allPassed: false, bad: [{ id: "tsc", status: "FAIL" }] };
+    const lines: string[] = annotations(s, {}, "/nonexistent");
+    expect(lines.every((l) => l.startsWith("::notice title=pre5c-summary%3A "))).toBe(true);
+    const all = lines.join("\n");
+    expect(all).toContain("tsc: FAIL (exit 2)");
+    expect(all).toContain("vitest: no vitest.json recorded");
+    expect(all).toContain("PROBLEM: next (critical)");
+    expect(all).toContain("NOT PASSED");
+    expect(all).not.toMatch(/\n(?!::notice)/); // every logical line is a single-line command
+  });
+});
