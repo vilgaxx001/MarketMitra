@@ -1,0 +1,596 @@
+{
+ "base": "http://127.0.0.1:3101",
+ "runId": "mvghz2lo",
+ "results": [
+  {
+   "name": "unauthenticated /auth/me -> 401 UNAUTHENTICATED",
+   "ok": true,
+   "detail": "401 {\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"You must be signed in to access this.\"}}"
+  },
+  {
+   "name": "signup with weak password -> 400 VALIDATION_ERROR",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"name\",\"message\":\"Name must be at least 2 characters\"},{\"path\":\"password\",\"message\":\"Password must be at least 8 characters\"},{\"path\":\"password\",\"message\":\"Include at least one uppercase letter\"},{"
+  },
+  {
+   "name": "signup without accepting terms -> 400",
+   "ok": true,
+   "detail": "400"
+  },
+  {
+   "name": "signup (A) -> 201 and a session cookie is set",
+   "ok": true,
+   "detail": "201 {\"data\":{\"user\":{\"id\":\"cmvghz3by0000z20serramqgy\",\"email\":\"http-verify-a-mvghz2lo@example.test\",\"name\":\"User a\",\"emailVerified\":false}}}"
+  },
+  {
+   "name": "signup response does not expose the password or its hash",
+   "ok": true,
+   "detail": "{\"data\":{\"user\":{\"id\":\"cmvghz3by0000z20serramqgy\",\"email\":\"http-verify-a-mvghz2lo@example.test\",\"name\":\"User a\",\"emailVerified\":false}}}"
+  },
+  {
+   "name": "duplicate email signup is rejected (4xx, not 500)",
+   "ok": true,
+   "detail": "409 {\"error\":{\"code\":\"CONFLICT\",\"message\":\"An account with this email already exists. Try logging in instead.\"}}"
+  },
+  {
+   "name": "password is stored hashed (not the plaintext)",
+   "ok": true,
+   "detail": "$2a$12$…"
+  },
+  {
+   "name": "/auth/me with session -> 200 and own email",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghz3by0000z20serramqgy\",\"email\":\"http-verify-a-mvghz2lo@example.test\",\"name\":\"User a\",\"avatarUrl\":null,\"platformRole\":\"USER\",\"emailVerified\":false}}"
+  },
+  {
+   "name": "tampered session cookie -> 401",
+   "ok": true,
+   "detail": "401 {\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"You must be signed in to access this.\"}}"
+  },
+  {
+   "name": "login with wrong password -> 401, no cookie",
+   "ok": true,
+   "detail": "401 {\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"Incorrect email or password. Please try again.\"}}"
+  },
+  {
+   "name": "login for unknown user -> same 401 (no account enumeration)",
+   "ok": true,
+   "detail": "401 {\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"Incorrect email or password. Please try again.\"}}"
+  },
+  {
+   "name": "login with correct password -> 200 and cookie",
+   "ok": true,
+   "detail": "200 {\"data\":{\"user\":{\"id\":\"cmvghz3by0000z20serramqgy\",\"email\":\"http-verify-a-mvghz2lo@example.test\",\"name\":\"User a\",\"platformRole\":\"USER\",\"emailVerified\":false}}}"
+  },
+  {
+   "name": "logout then /auth/me -> 401",
+   "ok": true,
+   "detail": "200 / 401"
+  },
+  {
+   "name": "a copied session token is rejected after logout",
+   "ok": true,
+   "detail": "401 {\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"You must be signed in to access this.\"}}"
+  },
+  {
+   "name": "a copied session token is also refused by resend-verification after logout",
+   "ok": true,
+   "detail": "401 {\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"You must be signed in to access this.\"}}"
+  },
+  {
+   "name": "a token whose sessions were all deleted (password change/reset) is rejected",
+   "ok": true,
+   "detail": "401 {\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"You must be signed in to access this.\"}}"
+  },
+  {
+   "name": "A creates workspace",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghz5zc000gz20s4u2fu7n0\",\"name\":\"Alpha mvghz2lo\",\"slug\":\"alpha-mvghz2lo\",\"ownerId\":\"cmvghz3by0000z20serramqgy\",\"isActive\":true,\"onboardingStep\":0,\"onboardingCompletedAt\":null,\"createdAt\":\"2026-10-20T09:45:15.527Z\",\"updatedAt\":\"2026-10-20T09:45:15.527Z\"}}"
+  },
+  {
+   "name": "B creates workspace",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghz605000mz20ss9p6rt4a\",\"name\":\"Beta mvghz2lo\",\"slug\":\"beta-mvghz2lo\",\"ownerId\":\"cmvghz42a0003z20sr2urgleh\",\"isActive\":true,\"onboardingStep\":0,\"onboardingCompletedAt\":null,\"createdAt\":\"2026-10-20T09:45:15.556Z\",\"updatedAt\":\"2026-10-20T09:45:15.556Z\"}}"
+  },
+  {
+   "name": "A's workspace list contains Alpha and not Beta",
+   "ok": true,
+   "detail": "[{\"id\":\"cmvghz5zc000gz20s4u2fu7n0\",\"name\":\"Alpha mvghz2lo\",\"slug\":\"alpha-mvghz2lo\",\"role\":\"ADMIN\",\"memberCount\":1,\"businessCount\":0}]"
+  },
+  {
+   "name": "A creates business in Alpha",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghz6dp000rz20smf602n6i\",\"workspaceId\":\"cmvghz5zc000gz20s4u2fu7n0\",\"slug\":\"alpha-bakery\",\"businessName\":\"Alpha Bakery\",\"description\":null,\"industry\":null,\"category\":null,\"businessType\":null,\"website\":null,\"country\":null,\"state\":null,\"city\":null,\"timeZone\":null,\"preferredLanguage"
+  },
+  {
+   "name": "B creates business in Beta",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghz6f5000uz20skmzclwjc\",\"workspaceId\":\"cmvghz605000mz20ss9p6rt4a\",\"slug\":\"beta-bikes\",\"businessName\":\"Beta Bikes\",\"description\":null,\"industry\":null,\"category\":null,\"businessType\":null,\"website\":null,\"country\":null,\"state\":null,\"city\":null,\"timeZone\":null,\"preferredLanguage\":\"e"
+  },
+  {
+   "name": "ADMIN: everything allowed (business create answers 402 plan-limit because Alpha already has its one free-plan business)",
+   "ok": true,
+   "detail": "{\"bizList\":200,\"bizCreate\":402,\"prefRead\":200,\"prefEdit\":200,\"memRead\":200,\"memCreate\":201}"
+  },
+  {
+   "name": "TEAM_MEMBER: read business/preferences/memory allowed; create business, edit preferences, create memory -> 403",
+   "ok": true,
+   "detail": "{\"bizList\":200,\"bizCreate\":403,\"prefRead\":200,\"prefEdit\":403,\"memRead\":200,\"memCreate\":403}"
+  },
+  {
+   "name": "CLIENT: only business read allowed; preferences/memory read+write and business create -> 403",
+   "ok": true,
+   "detail": "{\"bizList\":200,\"bizCreate\":403,\"prefRead\":403,\"prefEdit\":403,\"memRead\":403,\"memCreate\":403}"
+  },
+  {
+   "name": "CLIENT cannot execute AI (ai:execute) -> 403",
+   "ok": true,
+   "detail": "403 {\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"You don't have permission to perform this action.\"}}"
+  },
+  {
+   "name": "B (other tenant) GET /api/v1/workspaces/alpha-mvghz2lo/businesses/:id/ai-preferences using Alpha's slug -> 403/404",
+   "ok": true,
+   "detail": "403 {\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"You don't have access to this workspace, or it doesn't exist.\"}}"
+  },
+  {
+   "name": "B (other tenant) GET /api/v1/workspaces/alpha-mvghz2lo/businesses/:id/ai-memories using Alpha's slug -> 403/404",
+   "ok": true,
+   "detail": "403 {\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"You don't have access to this workspace, or it doesn't exist.\"}}"
+  },
+  {
+   "name": "B (other tenant) GET /api/v1/workspaces/alpha-mvghz2lo/businesses/:id using Alpha's slug -> 403/404",
+   "ok": true,
+   "detail": "403 {\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"You don't have access to this workspace, or it doesn't exist.\"}}"
+  },
+  {
+   "name": "B (other tenant) GET /api/v1/workspaces/alpha-mvghz2lo/businesses using Alpha's slug -> 403/404",
+   "ok": true,
+   "detail": "403 {\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"You don't have access to this workspace, or it doesn't exist.\"}}"
+  },
+  {
+   "name": "B with OWN slug but Alpha's businessId (preferences) -> 404, not Alpha's data",
+   "ok": true,
+   "detail": "404 {\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Business not found.\"}}"
+  },
+  {
+   "name": "B with OWN slug but Alpha's businessId (memories list) -> 404",
+   "ok": true,
+   "detail": "404 {\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Business not found.\"}}"
+  },
+  {
+   "name": "B cannot WRITE Alpha's preferences through its own slug -> 404",
+   "ok": true,
+   "detail": "404 {\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Business not found.\"}}"
+  },
+  {
+   "name": "B cannot CREATE a memory on Alpha's business through its own slug -> 404",
+   "ok": true,
+   "detail": "404 {\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Business not found.\"}}"
+  },
+  {
+   "name": "no memory row was created on Alpha's business by B",
+   "ok": true,
+   "detail": "rows=1"
+  },
+  {
+   "name": "NO cookie + fabricated four identity headers (SUPER_ADMIN) -> 401 on every route",
+   "ok": true,
+   "detail": "{\"GET /businesses\":401,\"GET ai-preferences\":401,\"GET ai-memories\":401,\"PATCH ai-preferences\":401,\"POST ai-memories\":401,\"POST ai/execute\":401,\"GET /auth/me\":401}"
+  },
+  {
+   "name": "NO cookie + the VICTIM's real userId/email + forged SUPER_ADMIN -> 401 on every route",
+   "ok": true,
+   "detail": "{\"GET /businesses\":401,\"GET ai-preferences\":401,\"GET ai-memories\":401,\"PATCH ai-preferences\":401,\"POST ai-memories\":401,\"POST ai/execute\":401,\"GET /auth/me\":401}"
+  },
+  {
+   "name": "NO cookie + the attacker's OWN valid sessionId/userId (copied from their JWT) + forged SUPER_ADMIN -> 401 on every route",
+   "ok": false,
+   "detail": "{\"GET /businesses\":200,\"GET ai-preferences\":200,\"GET ai-memories\":200,\"PATCH ai-preferences\":200,\"POST ai-memories\":201,\"POST ai/execute\":502,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "garbage (not a JWT) cookie + attacker's own ids + forged SUPER_ADMIN -> 401 on every route",
+   "ok": false,
+   "detail": "{\"GET /businesses\":200,\"GET ai-preferences\":200,\"GET ai-memories\":200,\"PATCH ai-preferences\":200,\"POST ai-memories\":201,\"POST ai/execute\":502,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "tampered signature cookie + attacker's own ids + forged SUPER_ADMIN -> 401 on every route",
+   "ok": false,
+   "detail": "{\"GET /businesses\":200,\"GET ai-preferences\":200,\"GET ai-memories\":200,\"PATCH ai-preferences\":200,\"POST ai-memories\":201,\"POST ai/execute\":502,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "payload swapped to SUPER_ADMIN, original signature kept cookie + attacker's own ids + forged SUPER_ADMIN -> 401 on every route",
+   "ok": false,
+   "detail": "{\"GET /businesses\":200,\"GET ai-preferences\":200,\"GET ai-memories\":200,\"PATCH ai-preferences\":200,\"POST ai-memories\":201,\"POST ai/execute\":502,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "EXPIRED (correctly signed, exp in the past) cookie + attacker's own ids + forged SUPER_ADMIN -> 401 on every route",
+   "ok": false,
+   "detail": "{\"GET /businesses\":200,\"GET ai-preferences\":200,\"GET ai-memories\":200,\"PATCH ai-preferences\":200,\"POST ai-memories\":201,\"POST ai/execute\":502,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "signed with the WRONG secret cookie + attacker's own ids + forged SUPER_ADMIN -> 401 on every route",
+   "ok": false,
+   "detail": "{\"GET /businesses\":200,\"GET ai-preferences\":200,\"GET ai-memories\":200,\"PATCH ai-preferences\":200,\"POST ai-memories\":201,\"POST ai/execute\":502,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "alg=none (unsigned) cookie + attacker's own ids + forged SUPER_ADMIN -> 401 on every route",
+   "ok": false,
+   "detail": "{\"GET /businesses\":200,\"GET ai-preferences\":200,\"GET ai-memories\":200,\"PATCH ai-preferences\":200,\"POST ai-memories\":201,\"POST ai/execute\":502,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "valid cookie (tenant B) + forged SUPER_ADMIN -> still 403 on Alpha's workspace routes (role is not taken from the header)",
+   "ok": true,
+   "detail": "{\"GET /businesses\":403,\"GET ai-preferences\":403,\"GET ai-memories\":403,\"PATCH ai-preferences\":403,\"POST ai-memories\":403,\"POST ai/execute\":403,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "valid cookie (B) + forged x-user-id/x-user-email of victim A -> /auth/me still reports B (headers are ignored), never A",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghz42a0003z20sr2urgleh\",\"email\":\"http-verify-b-mvghz2lo@example.test\",\"name\":\"User b\",\"avatarUrl\":null,\"platformRole\":\"USER\",\"emailVerified\":false}}"
+  },
+  {
+   "name": "valid cookie (B) + forged victim userId + SUPER_ADMIN -> Alpha's routes 403 (never A's identity)",
+   "ok": true,
+   "detail": "{\"GET /businesses\":403,\"GET ai-preferences\":403,\"GET ai-memories\":403,\"PATCH ai-preferences\":403,\"POST ai-memories\":403,\"POST ai/execute\":403,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "valid cookie (B) + forged SUPER_ADMIN, own slug + Alpha's businessId -> 404 (cross-business, no data)",
+   "ok": true,
+   "detail": "404 {\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Business not found.\"}}"
+  },
+  {
+   "name": "none of the forged writes reached the database (no FORGED-WRITE preference, no FORGED-MEMORY row)",
+   "ok": false,
+   "detail": "{\"p\":1,\"m\":7}"
+  },
+  {
+   "name": "NO cookie + forged SUPER_ADMIN headers: Alpha's dashboard page redirects to /login (not rendered)",
+   "ok": true,
+   "detail": "307 /login?redirect=%2Falpha-mvghz2lo%2Fdashboard"
+  },
+  {
+   "name": "valid cookie (B) + forged SUPER_ADMIN: Alpha's dashboard page does NOT render (redirect away)",
+   "ok": true,
+   "detail": "307 /dashboard"
+  },
+  {
+   "name": "valid cookie (B): B's OWN dashboard page still renders (200) — legitimate flow preserved",
+   "ok": true,
+   "detail": "200 null"
+  },
+  {
+   "name": "legitimate SUPER_ADMIN (promoted in DB, then logged in): /auth/me reports SUPER_ADMIN",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghzfp60029z20sd2iee7y9\",\"email\":\"http-verify-sa-mvghz2lo@example.test\",\"name\":\"User sa\",\"avatarUrl\":null,\"platformRole\":\"SUPER_ADMIN\",\"emailVerified\":false}}"
+  },
+  {
+   "name": "legitimate SUPER_ADMIN keeps cross-workspace access (Alpha 200, Beta 200) and unknown workspaces are 404",
+   "ok": true,
+   "detail": "200/200/404"
+  },
+  {
+   "name": "token issued while SUPER_ADMIN (JWT still says SUPER_ADMIN) but DB-demoted to USER -> Alpha's routes 403 (role comes from the DB)",
+   "ok": false,
+   "detail": "SUPER_ADMIN {\"GET /businesses\":200,\"GET ai-preferences\":200,\"GET ai-memories\":200,\"PATCH ai-preferences\":200,\"POST ai-memories\":201,\"POST ai/execute\":502,\"GET /auth/me\":200}"
+  },
+  {
+   "name": "demoted user's /auth/me reports USER, not the stale JWT role",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghzgfz002cz20s8jms1ezv\",\"email\":\"http-verify-demoted-mvghz2lo@example.test\",\"name\":\"User demoted\",\"avatarUrl\":null,\"platformRole\":\"USER\",\"emailVerified\":false}}"
+  },
+  {
+   "name": "a user promoted in the DB AFTER login (JWT says USER) gets SUPER_ADMIN access immediately (DB is the authority, both directions)",
+   "ok": false,
+   "detail": "403 {\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"You don't have access to this workspace, or it doesn't exist.\"}}"
+  },
+  {
+   "name": "a deactivated user's still-valid session stops working (workspace route and workspace list -> 401); worked before deactivation",
+   "ok": false,
+   "detail": "200 200 200"
+  },
+  {
+   "name": "a valid JWT whose server-side session row has EXPIRED -> 401 on every route (worked before expiry)",
+   "ok": true,
+   "detail": "200 {\"GET /businesses\":401,\"GET ai-preferences\":401,\"GET ai-memories\":401,\"PATCH ai-preferences\":401,\"POST ai-memories\":401,\"POST ai/execute\":401,\"GET /auth/me\":401}"
+  },
+  {
+   "name": "GET returns defaults for a new business",
+   "ok": true,
+   "detail": "200 {\"data\":{\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"detailLevel\":\"CONCISE\",\"formatting\":\"NO_PREFERENCE\",\"businessInstructions\":\"FORGED-WRITE\",\"behaviorConstraints\":[],\"isDefault\":false,\"updatedAt\":\"2026-10-20T09:45:29.719Z\"}}"
+  },
+  {
+   "name": "PATCH valid preferences -> 200",
+   "ok": true,
+   "detail": "200 {\"data\":{\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"detailLevel\":\"DETAILED\",\"formatting\":\"BULLET_POINTS\",\"businessInstructions\":\"Friendly tone. Mention the 7am opening.\",\"behaviorConstraints\":[\"No discounts\",\"No emojis\"],\"isDefault\":false,\"updatedAt\":\"2026-10-20T09:45:31.374Z\"}}"
+  },
+  {
+   "name": "preferences persisted in Postgres exactly as sent",
+   "ok": true,
+   "detail": "{\"d\":\"DETAILED\",\"f\":\"BULLET_POINTS\",\"bc\":[\"No discounts\",\"No emojis\"],\"bi\":\"Friendly tone. Mention the 7am opening.\"}"
+  },
+  {
+   "name": "GET after PATCH round-trips",
+   "ok": true,
+   "detail": "{\"data\":{\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"detailLevel\":\"DETAILED\",\"formatting\":\"BULLET_POINTS\",\"businessInstructions\":\"Friendly tone. Mention the 7am opening.\",\"behaviorConstraints\":[\"No discounts\",\"No emojis\"],\"isDefault\":false,\"updatedAt\":\"2026-10-20T09:45:31.374Z\"}}"
+  },
+  {
+   "name": "PATCH rejects unknown field -> 400 VALIDATION_ERROR",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"\",\"message\":\"Unrecognized key(s) in object: 'evil'\"},{\"path\":\"\",\"message\":\"Provide at least one preference to update\"}]}}"
+  },
+  {
+   "name": "PATCH rejects empty object -> 400 VALIDATION_ERROR",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"\",\"message\":\"Provide at least one preference to update\"}]}}"
+  },
+  {
+   "name": "PATCH rejects angle brackets -> 400 VALIDATION_ERROR",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"businessInstructions\",\"message\":\"The characters < and > are not allowed\"}]}}"
+  },
+  {
+   "name": "PATCH rejects invalid enum -> 400 VALIDATION_ERROR",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"detailLevel\",\"message\":\"Invalid enum value. Expected 'CONCISE' | 'STANDARD' | 'DETAILED', received 'NOPE'\"}]}}"
+  },
+  {
+   "name": "PATCH rejects too many constraints -> 400 VALIDATION_ERROR",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"behaviorConstraints\",\"message\":\"Array must contain at most 10 element(s)\"}]}}"
+  },
+  {
+   "name": "PATCH rejects control chars -> 400 VALIDATION_ERROR",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"businessInstructions\",\"message\":\"Contains unsupported control characters\"}]}}"
+  },
+  {
+   "name": "DELETE resets preferences (instructions cleared, constraints empty or row removed)",
+   "ok": true,
+   "detail": "200 undefined"
+  },
+  {
+   "name": "create memory -> 201 with id",
+   "ok": true,
+   "detail": "201 {\"data\":{\"id\":\"cmvghzicn0035z20siwgiib5n\",\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"type\":\"BUSINESS_FACT\",\"status\":\"ACTIVE\",\"label\":\"Product\",\"content\":\"We bake sourdough daily.\",\"metadata\":{\"batch\":3,\"shift\":\"morning\"},\"expiresAt\":null,\"isExpired\":false,\"createdById\":\"cmvghz3by0000z20serramqgy\""
+  },
+  {
+   "name": "memory persisted ACTIVE with the creating user recorded",
+   "ok": true,
+   "detail": "{\"s\":\"ACTIVE\",\"createdById\":\"cmvghz3by0000z20serramqgy\"}"
+  },
+  {
+   "name": "list returns the memory with totalCount meta",
+   "ok": true,
+   "detail": "200 {\"data\":[{\"id\":\"cmvghzicn0035z20siwgiib5n\",\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"type\":\"BUSINESS_FACT\",\"status\":\"ACTIVE\",\"label\":\"Product\",\"content\":\"We bake sourdough daily.\",\"metadata\":{\"batch\":"
+  },
+  {
+   "name": "get one memory -> 200",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghzicn0035z20siwgiib5n\",\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"type\":\"BUSINESS_FACT\",\"status\":\"ACTIVE\",\"label\":\"Product\",\"content\":\"We bake sourdough daily.\",\"metadata\":{\"batch\":3,\"shift\":\"morning\"},\"expiresAt\":null,\"isExpired\":false,\"createdById\":\"cmvghz3by0000z20serramqgy\""
+  },
+  {
+   "name": "update memory -> 200",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghzicn0035z20siwgiib5n\",\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"type\":\"BUSINESS_FACT\",\"status\":\"ACTIVE\",\"label\":\"Product\",\"content\":\"We bake sourdough and rye daily.\",\"metadata\":{\"batch\":3,\"shift\":\"morning\"},\"expiresAt\":null,\"isExpired\":false,\"createdById\":\"cmvghz3by0000z20se"
+  },
+  {
+   "name": "TEAM_MEMBER cannot edit a memory -> 403",
+   "ok": true,
+   "detail": "403 {\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"You don't have permission to perform this action.\"}}"
+  },
+  {
+   "name": "B cannot edit Alpha's memory id via B's own business -> 404",
+   "ok": true,
+   "detail": "404 {\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Memory not found.\"}}"
+  },
+  {
+   "name": "B cannot edit Alpha's memory id via Alpha's business id on B's slug -> 404",
+   "ok": true,
+   "detail": "404 {\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Business not found.\"}}"
+  },
+  {
+   "name": "memory content unchanged after the cross-tenant attempts",
+   "ok": true,
+   "detail": "We bake sourdough and rye daily."
+  },
+  {
+   "name": "archive memory -> 200",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghzicn0035z20siwgiib5n\",\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"type\":\"BUSINESS_FACT\",\"status\":\"ARCHIVED\",\"label\":\"Product\",\"content\":\"We bake sourdough and rye daily.\",\"metadata\":{\"batch\":3,\"shift\":\"morning\"},\"expiresAt\":null,\"isExpired\":false,\"createdById\":\"cmvghz3by0000z20"
+  },
+  {
+   "name": "archived memory is hidden from the default list",
+   "ok": true,
+   "detail": "{\"data\":[{\"id\":\"cmvghzgyb002iz20sirzi6zb0\",\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"type\":\"BUSINESS_FACT\",\"status\":\"ACTIVE\",\"label\":null,\"content\":\"FORGED-MEMORY\",\"metadata\":{},\"expiresAt\":null,\"isEx"
+  },
+  {
+   "name": "restore memory -> 200 and ACTIVE again",
+   "ok": true,
+   "detail": "200 {\"data\":{\"id\":\"cmvghzicn0035z20siwgiib5n\",\"businessId\":\"cmvghz6dp000rz20smf602n6i\",\"type\":\"BUSINESS_FACT\",\"status\":\"ACTIVE\",\"label\":\"Product\",\"content\":\"We bake sourdough and rye daily.\",\"metadata\":{\"batch\":3,\"shift\":\"morning\"},\"expiresAt\":null,\"isExpired\":false,\"createdById\":\"cmvghz3by0000z20se"
+  },
+  {
+   "name": "create rejects secret-shaped content (API key) -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"content\",\"message\":\"Looks like a credential or payment card number, which must not be stored\"}]}}"
+  },
+  {
+   "name": "create rejects payment-card number -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"content\",\"message\":\"Looks like a credential or payment card number, which must not be stored\"}]}}"
+  },
+  {
+   "name": "create rejects unknown/server-controlled field businessId -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"\",\"message\":\"Unrecognized key(s) in object: 'businessId'\"}]}}"
+  },
+  {
+   "name": "create rejects unknown field status -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"\",\"message\":\"Unrecognized key(s) in object: 'status'\"}]}}"
+  },
+  {
+   "name": "create rejects angle brackets -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"content\",\"message\":\"The characters < and > are not allowed\"}]}}"
+  },
+  {
+   "name": "create rejects secret-named metadata key -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"metadata.apiKey\",\"message\":\"This key name is not allowed\"}]}}"
+  },
+  {
+   "name": "create rejects past expiresAt -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"expiresAt\",\"message\":\"expiresAt must be in the future\"}]}}"
+  },
+  {
+   "name": "create rejects invalid type -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"type\",\"message\":\"Invalid enum value. Expected 'BUSINESS_FACT' | 'BUSINESS_PREFERENCE' | 'BUSINESS_GOAL' | 'BUSINESS_CONSTRAINT', received 'NOPE'\"}]}}"
+  },
+  {
+   "name": "audit log rows were written for the writes above",
+   "ok": true,
+   "detail": "rows=26 actions=workspace.created,business.created,ai_preferences.updated,ai_memory.created,ai_preferences.reset,ai_memory.updated,ai_memory.archived,ai_memory.restored"
+  },
+  {
+   "name": "audit metadata contains no plaintext password / session token / memory content",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "preferences: malformed JSON -> 400 (no 500, no parser text echoed)",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body must be valid JSON.\"}}"
+  },
+  {
+   "name": "preferences: empty body -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body must be valid JSON.\"}}"
+  },
+  {
+   "name": "preferences: invalid UTF-8 -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body must be valid JSON.\"}}"
+  },
+  {
+   "name": "preferences: 300 KB body -> 400 (too large)",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body is too large.\"}}"
+  },
+  {
+   "name": "preferences: oversized CHUNKED body with no Content-Length -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body is too large.\"}}"
+  },
+  {
+   "name": "preferences: JSON array instead of object -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"\",\"message\":\"Expecte"
+  },
+  {
+   "name": "memory create: malformed JSON -> 400 (no 500, no parser text echoed)",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body must be valid JSON.\"}}"
+  },
+  {
+   "name": "memory create: empty body -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body must be valid JSON.\"}}"
+  },
+  {
+   "name": "memory create: invalid UTF-8 -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body must be valid JSON.\"}}"
+  },
+  {
+   "name": "memory create: 300 KB body -> 400 (too large)",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body is too large.\"}}"
+  },
+  {
+   "name": "memory create: oversized CHUNKED body with no Content-Length -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body is too large.\"}}"
+  },
+  {
+   "name": "memory create: JSON array instead of object -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"\",\"message\":\"Expecte"
+  },
+  {
+   "name": "execute: malformed JSON -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body must be valid JSON.\"}}"
+  },
+  {
+   "name": "execute: 1.3 MB body -> 400 (too large)",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"The request body is too large.\"}}"
+  },
+  {
+   "name": "execute: 21 messages -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"messages\",\"message\":"
+  },
+  {
+   "name": "execute: 8,001-char message -> 400",
+   "ok": true,
+   "detail": "400"
+  },
+  {
+   "name": "execute: maxOutputTokens above limit -> 400",
+   "ok": true,
+   "detail": "400"
+  },
+  {
+   "name": "execute: requiresBusinessContext without businessId -> 400",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"One or more fields are invalid.\",\"details\":[{\"path\":\"businessId\",\"message\":\"businessId is required when requiresB"
+  },
+  {
+   "name": "server still healthy after the abusive requests",
+   "ok": true,
+   "detail": "401"
+  },
+  {
+   "name": "valid execute returns a SAFE provider error envelope (502 PROVIDER_ERROR), not 500 and not a stack trace",
+   "ok": true,
+   "detail": "502 {\"error\":{\"code\":\"PROVIDER_ERROR\",\"message\":\"AI generation is temporarily unavailable. Please try again shortly.\",\"details\":{\"code\":\"NO_COMPATIBLE_MODEL\"}}}"
+  },
+  {
+   "name": "the provider key is never present in the response",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "execute with ANOTHER tenant's businessId -> 404 NOT_FOUND (not a provider error, no tenant data in the body)",
+   "ok": true,
+   "detail": "404 {\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Business not found, or it doesn't belong to this workspace.\"}}"
+  },
+  {
+   "name": "TEAM_MEMBER may call execute (permission passes; provider error is expected)",
+   "ok": true,
+   "detail": "502 {\"error\":{\"code\":\"PROVIDER_ERROR\",\"message\":\"AI generation is temporarily unavailable. Please try again shortly.\",\"details\":{\"code\":\"NO_COMPATIBLE_MODEL\"}}}"
+  },
+  {
+   "name": "counter key exists in Redis with a bounded TTL after the execute calls",
+   "ok": true,
+   "detail": "count=11 ttl=45"
+  },
+  {
+   "name": "exactly 20 calls pass the limiter per window, the rest -> 429 RATE_LIMITED",
+   "ok": true,
+   "detail": "[502,502,502,502,502,502,502,502,502,502,502,502,502,502,502,502,502,502,502,502,429,429,429,429]"
+  },
+  {
+   "name": "429 body is the standard envelope",
+   "ok": true,
+   "detail": "429 {\"error\":{\"code\":\"RATE_LIMITED\",\"message\":\"Too many AI requests for this workspace. Please try again shortly.\",\"details\":{\"code\":\"RATE_LIMIT_EXCEEDED_INTERNAL\"}}}"
+  },
+  {
+   "name": "another workspace is not limited by Alpha's window",
+   "ok": true,
+   "detail": "502 {\"error\":{\"code\":\"PROVIDER_ERROR\",\"message\":\"AI generation is temporarily unavailable. Please try again shortly.\",\"detai"
+  }
+ ]
+}

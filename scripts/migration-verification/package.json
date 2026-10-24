@@ -1,0 +1,1 @@
+{"name":"marketmitra-migration-verification","private":true,"version":"0.0.0","dependencies":{"@prisma/adapter-pg":"^7.10.0","@prisma/schema-engine-wasm":"^6.19.0-26.2ba551f319ab1df4bc874a89965d8b3641056773","pg":"^8.23.1","schema-wasm-621":"npm:@prisma/prisma-schema-wasm@^6.2.0-14.4123509d24aa4dede1e864b46351bf2790323b69"}}

@@ -1,0 +1,305 @@
+/**
+ * src/styles/tokens.css
+ *
+ * ============================================================================
+ * MARKETMITRA DESIGN TOKENS
+ * ============================================================================
+ *
+ * This file is the single source of truth for every visual primitive in the
+ * product: color, typography, spacing, radius, elevation, and motion. No
+ * component should hardcode a hex value, a px shadow, or a transition
+ * duration — it reaches into these tokens via Tailwind's token-mapped
+ * utilities (see tailwind.config.ts) or `var(--token-name)` directly.
+ *
+ * DESIGN DIRECTION
+ * MarketMitra's product surface (the authenticated app — dashboard,
+ * projects, billing) is a quiet, high-precision workspace: the personality
+ * lives in the marketing site's 3D hero, not in the tool someone uses 40
+ * times a day. That's deliberate, and matches how Linear, Stripe Dashboard,
+ * and Vercel's dashboard all behave — expressive brand on the front door,
+ * restrained and fast in the workspace itself. Color is structural (status,
+ * hierarchy, brand accent) rather than decorative. Both themes share the
+ * same hue family (a deep blue–cyan brand pair) so switching themes never
+ * changes what the brand "feels like" — only the canvas it sits on.
+ *
+ * THEME STRATEGY
+ * Tokens are defined as HSL triplets (e.g. "222 47% 11%") rather than full
+ * hsl()/hex strings, because Tailwind's `hsl(var(--x) / <alpha-value>)`
+ * pattern needs raw components to support opacity modifiers like `bg-card/50`.
+ * Light mode is the default `:root`; dark mode overrides under `.dark`.
+ * next-themes (wired in Module 2's ThemeProvider) toggles the `.dark` class
+ * on <html> and persists the choice — see src/components/layout/theme-provider.tsx.
+ * ============================================================================
+ */
+
+:root {
+  /* ---------------------------------------------------------------------
+   * COLOR — Light mode (default)
+   * ------------------------------------------------------------------- */
+
+  /* Canvas */
+  --background: 0 0% 100%;
+  --foreground: 222 47% 11%;
+
+  /* Surfaces */
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+
+  /* Brand — electric blue / cyan pair, matches marketing site */
+  --primary: 221 83% 53%;          /* #2563EB */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 192 91% 42%;        /* #06B6D4 */
+  --secondary-foreground: 0 0% 100%;
+  --accent: 160 84% 39%;           /* #10B981 */
+  --accent-foreground: 0 0% 100%;
+
+  /* Neutral surfaces & text hierarchy */
+  --muted: 220 14% 96%;
+  --muted-foreground: 220 9% 46%;
+  --border: 220 13% 91%;
+  --input: 220 13% 91%;
+  --ring: 221 83% 53%;
+
+  /* Semantic status */
+  --success: 160 84% 39%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 222 47% 11%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --info: 199 89% 48%;
+  --info-foreground: 0 0% 100%;
+
+  /* Elevation surfaces (for layered UI: sidebar vs canvas vs modal) */
+  --surface-sunken: 220 14% 98%;
+  --surface-raised: 0 0% 100%;
+  --surface-overlay: 0 0% 100%;
+
+  /* Geometry */
+  --radius: 0.625rem; /* 10px base; sm/md/lg derived in tailwind.config.ts */
+
+  /* Shadows — soft, low-opacity, color-tinted toward the brand hue rather
+     than pure black, which is what makes elevation read as "premium" vs
+     "default browser drop-shadow." Values are full box-shadow strings
+     because shadow color/spread don't map cleanly to single HSL tokens. */
+  --shadow-xs: 0 1px 2px 0 rgb(15 23 42 / 0.04);
+  --shadow-sm: 0 1px 3px 0 rgb(15 23 42 / 0.06), 0 1px 2px -1px rgb(15 23 42 / 0.06);
+  --shadow-md: 0 4px 12px -2px rgb(15 23 42 / 0.08), 0 2px 6px -2px rgb(15 23 42 / 0.04);
+  --shadow-lg: 0 12px 24px -6px rgb(15 23 42 / 0.10), 0 4px 8px -4px rgb(15 23 42 / 0.06);
+  --shadow-xl: 0 24px 48px -12px rgb(15 23 42 / 0.14), 0 8px 16px -8px rgb(15 23 42 / 0.08);
+  --shadow-glow-primary: 0 0 0 1px hsl(221 83% 53% / 0.12), 0 8px 24px -4px hsl(221 83% 53% / 0.24);
+
+  /* Glassmorphism — used sparingly (command palette, notification panel,
+     sticky nav over content), never as a default card treatment */
+  --glass-bg: 255 255 255 / 0.72;
+  --glass-border: 255 255 255 / 0.4;
+  --glass-blur: 16px;
+
+  /* Focus ring offset background (so focus rings are visible on any surface) */
+  --focus-ring-offset-color: 0 0% 100%;
+}
+
+.dark {
+  /* ---------------------------------------------------------------------
+   * COLOR — Dark mode
+   * Not an inverted light theme — re-tuned so brand colors keep correct
+   * contrast (e.g. primary blue is lightened slightly; pure black is
+   * avoided in favor of a deep navy that matches the marketing site's
+   * --bg: #030712, so logged-out → logged-in never feels like a jump cut).
+   * ------------------------------------------------------------------- */
+
+  --background: 222 47% 4%;        /* ~#030712 */
+  --foreground: 210 40% 98%;
+
+  --card: 222 41% 7%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222 41% 7%;
+  --popover-foreground: 210 40% 98%;
+
+  --primary: 217 91% 60%;          /* lightened for AA contrast on dark bg */
+  --primary-foreground: 222 47% 4%;
+  --secondary: 189 94% 49%;
+  --secondary-foreground: 222 47% 4%;
+  --accent: 158 64% 45%;
+  --accent-foreground: 222 47% 4%;
+
+  --muted: 222 30% 12%;
+  --muted-foreground: 217 15% 65%;
+  --border: 222 25% 16%;
+  --input: 222 25% 16%;
+  --ring: 217 91% 60%;
+
+  --success: 158 64% 45%;
+  --success-foreground: 222 47% 4%;
+  --warning: 38 92% 55%;
+  --warning-foreground: 222 47% 4%;
+  --destructive: 0 72% 58%;
+  --destructive-foreground: 210 40% 98%;
+  --info: 199 89% 56%;
+  --info-foreground: 222 47% 4%;
+
+  --surface-sunken: 222 47% 3%;
+  --surface-raised: 222 41% 7%;
+  --surface-overlay: 222 38% 9%;
+
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.2);
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.3), 0 1px 2px -1px rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.4), 0 2px 6px -2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 12px 24px -6px rgb(0 0 0 / 0.5), 0 4px 8px -4px rgb(0 0 0 / 0.3);
+  --shadow-xl: 0 24px 48px -12px rgb(0 0 0 / 0.6), 0 8px 16px -8px rgb(0 0 0 / 0.4);
+  --shadow-glow-primary: 0 0 0 1px hsl(217 91% 60% / 0.2), 0 8px 32px -4px hsl(217 91% 60% / 0.35);
+
+  --glass-bg: 5 13 31 / 0.72;
+  --glass-border: 255 255 255 / 0.08;
+  --glass-blur: 20px;
+
+  --focus-ring-offset-color: 222 47% 4%;
+}
+
+/* ===========================================================================
+ * TYPOGRAPHY SCALE
+ * A single modular scale (1.25 ratio, "major third") used everywhere via
+ * Tailwind's text-* utilities mapped in tailwind.config.ts -> fontSize.
+ * Defined here as tokens so the scale itself is documented in one place.
+ *
+ * Font roles (loaded in src/app/layout.tsx via next/font):
+ *  --font-sans     body text, UI labels, forms       -> Inter
+ *  --font-display   headings, hero, marketing          -> Inter Display / Inter (tighter tracking)
+ *  --font-mono      code, API keys, invoice numbers     -> JetBrains Mono
+ * Using Inter for both sans and display (rather than importing a separate
+ * display face) keeps the authenticated app fast and consistent — the
+ * marketing site is the one place the brief's "OpenAI/Linear" reference
+ * point allows a single, very well-executed grotesque to carry both roles.
+ * ========================================================================= */
+:root {
+  --text-xs: 0.75rem;     /* 12px / line-height 1rem    — captions, labels */
+  --text-sm: 0.875rem;    /* 14px / line-height 1.25rem — body small, UI default */
+  --text-base: 1rem;      /* 16px / line-height 1.5rem  — body */
+  --text-lg: 1.125rem;    /* 18px / line-height 1.75rem — emphasized body */
+  --text-xl: 1.25rem;     /* 20px / line-height 1.75rem — card titles */
+  --text-2xl: 1.5rem;     /* 24px / line-height 2rem    — section headers */
+  --text-3xl: 1.875rem;   /* 30px / line-height 2.25rem — page titles */
+  --text-4xl: 2.25rem;    /* 36px / line-height 2.5rem  — dashboard hero numbers */
+  --text-5xl: 3rem;       /* 48px / line-height 1.1     — marketing display */
+  --text-6xl: 3.75rem;    /* 60px / line-height 1.05    — marketing hero */
+
+  --tracking-tighter: -0.04em;
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.02em;
+  --tracking-widest: 0.08em; /* eyebrows, uppercase labels */
+}
+
+/* ===========================================================================
+ * SPACING & GRID
+ * Tailwind's default 4px base scale is used directly (no override) — it is
+ * already the right primitive. Tokens below cover the things Tailwind
+ * doesn't: named layout dimensions used consistently across every layout
+ * shell built in this module.
+ * ========================================================================= */
+:root {
+  --layout-sidebar-width: 17.5rem;       /* 280px — dashboard/admin sidebar, expanded */
+  --layout-sidebar-collapsed: 4.5rem;    /* 72px — icon-only rail */
+  --layout-topbar-height: 3.75rem;       /* 60px — dashboard topbar */
+  --layout-content-max-width: 84rem;     /* 1344px — wide content containers */
+  --layout-reading-max-width: 42rem;     /* 672px — prose / settings forms */
+
+  /* Breakpoints (documented here; enforced via Tailwind's default screens +
+     two custom additions below for foldables/ultra-wide, set in
+     tailwind.config.ts -> screens) */
+  --breakpoint-xs: 22.5rem;  /* 360px  — small Android phones, portrait */
+  --breakpoint-sm: 40rem;    /* 640px  — large phones / foldables unfolded */
+  --breakpoint-md: 48rem;    /* 768px  — tablets, portrait */
+  --breakpoint-lg: 64rem;    /* 1024px — tablets landscape / small laptop */
+  --breakpoint-xl: 80rem;    /* 1280px — laptop / desktop */
+  --breakpoint-2xl: 96rem;   /* 1536px — large desktop */
+  --breakpoint-3xl: 120rem;  /* 1920px — ultra-wide monitors */
+}
+
+/* ===========================================================================
+ * MOTION
+ * Durations and easings as tokens so every animated component (Module 2's
+ * src/lib/motion.ts, every Radix-based component's open/close transition)
+ * pulls from the same physical "feel" instead of each engineer picking
+ * their own 200ms-vs-300ms.
+ * ========================================================================= */
+:root {
+  --duration-instant: 100ms;   /* state toggles: checkbox, switch */
+  --duration-fast: 150ms;      /* hover, button press */
+  --duration-base: 220ms;      /* default transitions: dropdown, tooltip */
+  --duration-moderate: 320ms;  /* modal, drawer, popover entrance */
+  --duration-slow: 480ms;      /* page transitions, large layout shifts */
+
+  /* Standard CSS cubic-beziers, named by feel rather than by number so
+     call sites read as intent ("ease-out-expressive" not "0.16,1,0.3,1") */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);       /* default, balanced */
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);        /* entrances */
+  --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);        /* exits */
+  --ease-expressive: cubic-bezier(0.16, 1, 0.3, 1);     /* hero/marketing only — hover lift, magnetic button */
+}
+
+/* Respect OS-level reduced motion preference globally. Components that use
+   the motion tokens above should also wrap animation-triggering logic with
+   the `usePrefersReducedMotion` hook (src/hooks/use-reduced-motion.ts) for
+   JS-driven animation (GSAP, canvas), since this media query only affects
+   CSS transitions/animations, not imperative JS. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ===========================================================================
+ * Z-INDEX SCALE
+ * Centralized so independently-built overlay components (Dialog, Drawer,
+ * DropdownMenu, Popover, CommandPalette, Toast, Tooltip) stack correctly
+ * relative to each other without each component guessing a number. Gaps
+ * of 10 are left between tiers for safe insertion later.
+ *
+ *   dropdown        select/dropdown menus, in-page popovers
+ *   sticky           sticky nav/table headers
+ *   drawer           slide-in panels (notification panel, mobile sidebar)
+ *   modal-backdrop   dialog overlay
+ *   modal            dialog content (just above its own backdrop)
+ *   popover          popovers/hover cards — must float above modals,
+ *                    since a popover can be triggered from within one
+ *   command-palette  Cmd+K — above everything except toasts/tooltips,
+ *                    since it's explicitly invoked and should never be
+ *                    obscured
+ *   toast            must outrank modals — a toast can fire while a
+ *                    modal is open (e.g. background save confirmation)
+ *   tooltip          highest — must never be obscured by anything
+ * ========================================================================= */
+:root {
+  --z-dropdown: 1000;
+  --z-sticky: 1010;
+  --z-drawer: 1020;
+  --z-modal-backdrop: 1030;
+  --z-modal: 1031;
+  --z-popover: 1040;
+  --z-command-palette: 1050;
+  --z-toast: 1060;
+  --z-tooltip: 1070;
+}
+
+/* ===========================================================================
+ * ELEVATION SYSTEM — semantic mapping of shadow tokens to UI roles.
+ * Components reference these classes (defined as Tailwind utilities via
+ * boxShadow in tailwind.config.ts) rather than raw --shadow-* tokens, so
+ * "what elevation should a popover be" is answered once, here.
+ *
+ *   elevation-0   flat            inline elements, table rows
+ *   elevation-1   shadow-xs       cards at rest, inputs
+ *   elevation-2   shadow-sm       cards on hover, dropdown triggers
+ *   elevation-3   shadow-md       popovers, dropdown menus, tooltips
+ *   elevation-4   shadow-lg       modals, drawers, command palette
+ *   elevation-5   shadow-xl       toasts (must outrank modals — they can
+ *                                 appear while a modal is open)
+ * ========================================================================= */

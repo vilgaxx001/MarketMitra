@@ -1,0 +1,222 @@
+# MarketMitra: Pre-5C release gate (VERIFICATION ONLY: this workflow never deploys, publishes or pushes anything).
+#
+# It runs the authoritative Prisma 6.2.1 checks and the genuine-HTTP suite on the NORMAL generated client and query engine
+# (no WASM preload, no substitute client, no checksum suppression). Every required step goes through scripts/ci/gate.sh, which
+# keeps the real exit code and never turns a failure into a pass. Logs are redacted and uploaded as an artifact even on failure.
+#
+# Actions are pinned by FULL commit SHA (tag in the trailing comment). Re-verify against upstream with: node scripts/ci/verify-action-pins.mjs
+# Needs a runner that can reach the official Prisma engine host (binaries.prisma.sh:443) or an explicitly approved, pinned
+# https mirror set in the repository VARIABLE PRISMA_ENGINES_MIRROR. See PRE_5C_CI_VERIFICATION_GUIDE.md.
+# No repository secret is required.
+name: pre5c-release-gate
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    branches: [main]
+
+# Least privilege: read-only token, and checkout does not persist it.
+permissions:
+  contents: read
+
+concurrency:
+  group: pre5c-release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Pre-5C gate (Prisma 6.2.1 / PostgreSQL 16 / Redis 7)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:16.4
+        env:
+          # Ephemeral service container on the runner's loopback, destroyed with the job. Trust auth means there is no database
+          # password anywhere in this workflow, its logs or its artifacts.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7.2.5
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      CI: "true"
+      HUSKY: "0"                       # `prepare` runs husky; there is no .git hook work to do in CI. Lifecycle scripts still run.
+      NEXT_TELEMETRY_DISABLED: "1"
+      CI_EVIDENCE_DIR: ${{ github.workspace }}/.ci-evidence
+      CI_REDACT_VARS: SESSION_SECRET
+      MM_CI_PG_BASE: postgresql://postgres@127.0.0.1:5432
+      DATABASE_URL: postgresql://postgres@127.0.0.1:5432/mm_ci_fresh
+      DIRECT_URL: postgresql://postgres@127.0.0.1:5432/mm_ci_fresh
+      REDIS_URL: redis://127.0.0.1:6379
+      REDIS_INTEGRATION_URL: redis://127.0.0.1:6379
+      APP_PORT: "3101"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22.22.0 (no dependency cache)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.0
+
+      - name: Prepare evidence directory and per-run scratch space
+        run: |
+          mkdir -p "$CI_EVIDENCE_DIR/logs" "$RUNNER_TEMP/mm-ci"
+          chmod +x scripts/ci/*.sh
+
+      # ---- A. Source and dependency integrity ---------------------------------------------------------------------------
+      - name: "A0 env-guard: no client/engine substitution, no checksum suppression"
+        env:
+          MIRROR_VAR: ${{ vars.PRISMA_ENGINES_MIRROR }}
+        run: scripts/ci/gate.sh env-guard required -- 'scripts/ci/env-guard.sh'
+
+      - name: A1 Record source digest, commit and tool versions
+        run: |
+          digest_line="$(node scripts/ci/source-digest.mjs)"
+          digest="${digest_line%% *}"
+          echo "CI_SOURCE_DIGEST=$digest" >> "$GITHUB_ENV"
+          {
+            echo "source_digest=$digest_line"
+            echo "commit=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF}"
+            echo "run=${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
+            echo "runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            echo "node=$(node -v)"
+            echo "npm=$(npm -v)"
+            echo "postgres_service=postgres:16.4 redis_service=redis:7.2.5"
+          } | tee "$CI_EVIDENCE_DIR/environment.txt"
+          node scripts/ci/source-digest.mjs --list > "$CI_EVIDENCE_DIR/source-files.sha256"
+
+      - name: A2 Generate a per-run SESSION_SECRET (masked, never uploaded)
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "SESSION_SECRET=$secret" >> "$GITHUB_ENV"
+
+      - name: A3 npm ci (normal lifecycle scripts; NOT --ignore-scripts)
+        run: scripts/ci/gate.sh npm-ci required -- 'npm ci'
+
+      - name: A4 npm ci for the verification harness (provides the pg client for scripts/ci and the HTTP suite)
+        run: scripts/ci/gate.sh harness-npm-ci required -- 'npm ci --prefix scripts/migration-verification'
+
+      - name: A5 Record Prisma CLI / client / engine versions
+        run: |
+          {
+            echo "prisma_cli_pkg=$(node -p "require('prisma/package.json').version")"
+            echo "prisma_client_pkg=$(node -p "require('@prisma/client/package.json').version")"
+            echo "engines_version=$(node -p "require('@prisma/engines-version').enginesVersion")"
+          } | tee -a "$CI_EVIDENCE_DIR/environment.txt"
+
+      - name: A6 Create the disposable databases (name- and host-checked)
+        run: scripts/ci/gate.sh db-create required -- 'node scripts/ci/db.mjs create mm_ci_fresh mm_ci_shadow mm_ci_existing'
+
+      # ---- B. Authoritative Prisma checks -------------------------------------------------------------------------------
+      - name: B1 prisma --version
+        run: scripts/ci/gate.sh prisma-version required -- 'npx prisma --version'
+
+      - name: B2 prisma validate
+        run: scripts/ci/gate.sh prisma-validate required -- 'npx prisma validate'
+
+      - name: B3 prisma generate
+        run: scripts/ci/gate.sh prisma-generate required -- 'npx prisma generate'
+
+      - name: B4 Genuine client and query engine present (static)
+        run: scripts/ci/gate.sh genuine-client-static required -- 'node scripts/ci/assert-genuine-client.mjs static'
+
+      - name: B5 prisma migrate deploy on the FRESH database
+        run: scripts/ci/gate.sh prisma-migrate-deploy required -- 'npx prisma migrate deploy'
+
+      - name: B6 Genuine client and query engine work against the MIGRATED PostgreSQL (runtime, no adapter; must follow deploy)
+        run: scripts/ci/gate.sh genuine-client-runtime required -- 'node scripts/ci/assert-genuine-client.mjs runtime'
+
+      - name: B7 prisma migrate status (informational, deploy above is the gate)
+        run: scripts/ci/gate.sh prisma-migrate-status info -- 'npx prisma migrate status'
+
+      - name: B8 Documented drift check against a disposable shadow database
+        run: |
+          scripts/ci/gate.sh prisma-drift required -- 'npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$MM_CI_PG_BASE/mm_ci_shadow" --exit-code'
+
+      - name: B9 Existing-install rehearsal (baseline resolve, then deploy) on synthetic data
+        run: scripts/ci/gate.sh existing-install-rehearsal required -- 'node scripts/ci/existing-install-rehearsal.mjs'
+
+      - name: B10 TypeScript (tsc --noEmit)
+        run: scripts/ci/gate.sh tsc required -- 'npx tsc --noEmit'
+
+      # ---- D (part). Lint and automated tests --------------------------------------------------------------------------
+      - name: D1 Lint
+        run: scripts/ci/gate.sh lint required -- 'npm run lint'
+
+      - name: D2 Full vitest suite including the real-Redis integration suite (skipped tests fail this gate)
+        run: |
+          scripts/ci/gate.sh vitest-with-redis required -- 'npx vitest run --reporter=default --reporter=json --outputFile.json="$CI_EVIDENCE_DIR/vitest.json" && node scripts/ci/assert-vitest.mjs "$CI_EVIDENCE_DIR/vitest.json"'
+
+      # ---- B (part). Production build ----------------------------------------------------------------------------------
+      - name: B11 Write the production-valid app env file (placeholders only; mode 600; not uploaded)
+        run: scripts/ci/write-env.sh "$RUNNER_TEMP/mm-ci/app.env" "$APP_PORT"
+
+      - name: B12 npm run build (prisma generate + next build, production env)
+        run: |
+          scripts/ci/gate.sh build required -- 'set -a; . "$RUNNER_TEMP/mm-ci/app.env"; set +a; npm run build'
+
+      # ---- C. Genuine HTTP tests ---------------------------------------------------------------------------------------
+      - name: C1 Start the production server (NODE_OPTIONS unset and verified)
+        run: scripts/ci/gate.sh app-start required -- 'scripts/ci/start-app.sh "$RUNNER_TEMP/mm-ci/app.env" "$APP_PORT"'
+
+      - name: C2 HTTP verification suite against the running app
+        run: |
+          scripts/ci/gate.sh http-suite required -- 'BASE_URL="http://127.0.0.1:$APP_PORT" PGURL="$DATABASE_URL" node scripts/http-verification/run.mjs --out "$CI_EVIDENCE_DIR/http.json"'
+
+      # ---- E. Security and dependency ----------------------------------------------------------------------------------
+      # Raw `npm audit` exits non-zero whenever ANY advisory exists, so its exit code is recorded as info; the required gate is the
+      # explicit policy below (production must be 0; only reviewed dev-only advisories may remain; nothing is hidden).
+      - name: E1 npm audit, production dependencies (reported separately)
+        run: scripts/ci/gate.sh audit-prod info -- 'npm audit --omit=dev --json > "$CI_EVIDENCE_DIR/audit-prod.json"; code=$?; npm audit --omit=dev || true; exit $code'
+
+      - name: E2 npm audit, all dependencies (reported separately)
+        run: scripts/ci/gate.sh audit-all info -- 'npm audit --json > "$CI_EVIDENCE_DIR/audit-all.json"; code=$?; npm audit || true; exit $code'
+
+      - name: E3 Audit policy (required)
+        run: scripts/ci/gate.sh audit-policy required -- 'node scripts/ci/audit-policy.mjs "$CI_EVIDENCE_DIR/audit-prod.json" "$CI_EVIDENCE_DIR/audit-all.json" scripts/ci/audit-deferred.json package-lock.json'
+
+      # ---- Always: stop, redact, summarize, clean up, upload -----------------------------------------------------------
+      - name: Finalize (stop server, redact server log, summarize, drop disposable databases)
+        if: always()
+        run: |
+          scripts/ci/stop-app.sh || true
+          # The raw server log lives in $RUNNER_TEMP (never uploaded); only the redacted copy enters the evidence directory.
+          if [ -f "$RUNNER_TEMP/mm-ci/server.raw.log" ]; then
+            node scripts/ci/redact.mjs < "$RUNNER_TEMP/mm-ci/server.raw.log" > "$CI_EVIDENCE_DIR/logs/server.log" || echo "server log redaction failed; log NOT included in the artifact"
+            rm -f "$RUNNER_TEMP/mm-ci/server.raw.log"
+          fi
+          [ -d node_modules ] && [ -d scripts/migration-verification/node_modules ] && node scripts/ci/db.mjs drop mm_ci_fresh mm_ci_shadow mm_ci_existing || echo "database cleanup skipped (harness not installed); the service container is destroyed with the job anyway"
+          # Propagates the summary's exit code: the job cannot end green unless every required gate recorded exit 0.
+          node scripts/ci/summarize.mjs
+
+      - name: Upload evidence artifact (redacted logs, JSON results, summary)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pre5c-gate-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-evidence/
+          if-no-files-found: error
+          retention-days: 14

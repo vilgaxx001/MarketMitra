@@ -1,0 +1,2 @@
+prisma/migrations/20261010120000_add_business_ai_preferences/migration.sql: statements=5 destructive=0
+prisma/migrations/20261011120000_add_business_memories/migration.sql: statements=7 destructive=0

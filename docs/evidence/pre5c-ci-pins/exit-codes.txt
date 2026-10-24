@@ -1,0 +1,8 @@
+actionlint exit 0
+verify-action-pins-online exit 0
+verify-action-pins-offline exit 0
+selftest exit 0
+tsc exit 0
+eslint exit 0
+vitest-with-redis exit 0
+assert-vitest exit 0

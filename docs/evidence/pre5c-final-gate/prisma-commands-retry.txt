@@ -1,0 +1,15 @@
+### npx prisma --version :: exit 1
+Error: Failed to fetch sha256 checksum at https://binaries.prisma.sh/all_commits/4123509d24aa4dede1e864b46351bf2790323b69/debian-openssl-3.0.x/libquery_engine.so.node.sha256 - 403 Forbidden
+
+### npx prisma validate :: exit 1
+Error: Failed to fetch sha256 checksum at https://binaries.prisma.sh/all_commits/4123509d24aa4dede1e864b46351bf2790323b69/debian-openssl-3.0.x/libquery_engine.so.node.gz.sha256 - 403 Forbidden
+
+### npx prisma generate :: exit 1
+Error: Failed to fetch sha256 checksum at https://binaries.prisma.sh/all_commits/4123509d24aa4dede1e864b46351bf2790323b69/debian-openssl-3.0.x/libquery_engine.so.node.sha256 - 403 Forbidden
+
+### DATABASE_URL=postgresql://<redacted> DIRECT_URL=postgresql://<redacted> npx prisma migrate deploy :: exit 1
+Error: Failed to fetch sha256 checksum at https://binaries.prisma.sh/all_commits/4123509d24aa4dede1e864b46351bf2790323b69/debian-openssl-3.0.x/schema-engine.sha256 - 403 Forbidden
+
+### npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url postgresql://<redacted> --exit-code :: exit 1
+Error: Failed to fetch sha256 checksum at https://binaries.prisma.sh/all_commits/4123509d24aa4dede1e864b46351bf2790323b69/debian-openssl-3.0.x/libquery_engine.so.node.gz.sha256 - 403 Forbidden
+

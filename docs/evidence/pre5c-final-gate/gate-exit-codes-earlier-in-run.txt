@@ -1,0 +1,18 @@
+npx tsc --noEmit :: exit 0
+npx eslint . --ext .ts,.tsx :: exit 0
+npx vitest run :: exit 0
+REDIS_INTEGRATION_URL=redis://127.0.0.1:63799 npx vitest run :: exit 1
+rm -rf .next && npx next build (env gate/build.env; NOT 'npm run build', which runs prisma generate) :: exit 0
+8a432b1198ff2d1dff2e053b73f3e88211ae39ea4aed75e2e1f257ae70fb169f  .next/static/css/94ae3875e273e4c6.css
+node scripts/http-verification/run.mjs (fresh server, WASM-substitute client) :: exit 0
+REDIS_INTEGRATION_URL=redis://127.0.0.1:63799 npx vitest run (attempt 2, Redis confirmed up) :: exit 0
+[SUBSTITUTE] apply.mjs fresh DB :: exit 0
+[SUBSTITUTE] drift.mjs live DB vs schema :: exit 0
+[SUBSTITUTE] drift.mjs migrations(shadow) vs schema :: exit 0
+[SUBSTITUTE] existing.mjs pre-5 install with data -> migrations :: exit 0
+[SUBSTITUTE] validate.cjs (prisma-schema-wasm, pinned engines commit) :: exit 0
+npm audit :: exit 1
+npm audit --omit=dev :: exit 1
+npm ci --dry-run (npm 10.9.4) in scratch copy :: exit 0
+npm audit --omit=dev (after lock bump) :: exit 0
+npm audit (after lock bump) :: exit 1

@@ -1,0 +1,43 @@
+=== U1-trust-headers ::       Tests  16 failed | 16 passed (32)
+         × JWT says SUPER_ADMIN but DB says USER, and there is no membership -> FORBIDDEN; the workspace is never read through the bypass 1ms
+         × alg=none (unsigned) cookie + forged headers -> UNAUTHENTICATED without touching the DB or headers() 1ms
+         × an ordinary member keeps their workspace role 4ms
+         × expired (correctly signed) cookie + forged headers -> UNAUTHENTICATED without touching the DB or headers() 1ms
+         × forged headers + no cookie -> UNAUTHENTICATED before any workspace lookup 1ms
+         × garbage (not a JWT) cookie + forged headers -> UNAUTHENTICATED without touching the DB or headers() 2ms
+         × looks up the pair taken from the VERIFIED cookie (never from a header) and never reads headers() 1ms
+         × no cookie + forged SUPER_ADMIN headers -> UNAUTHENTICATED; headers() is never read and the DB is never queried 12ms
+=== U2-jwt-role ::       Tests  4 failed | 28 passed (32)
+         × DB says SUPER_ADMIN -> cross-workspace access without membership is preserved 2ms
+         × JWT says SUPER_ADMIN but DB says USER, and there is no membership -> FORBIDDEN; the workspace is never read through the bypass 2ms
+         × a legitimate SUPER_ADMIN (DB says SUPER_ADMIN) keeps that role even if the JWT says USER 2ms
+         × valid cookie + live session -> returns the DB's role and email, not the JWT claims 11ms
+     FAIL  src/lib/middleware/__tests__/require-auth.test.ts > requireAuth — the database is the authority > a legitimate SUPER_ADMIN (DB says SUPER_ADMIN) keeps that role even if the JWT says USER
+     FAIL  src/lib/middleware/__tests__/require-auth.test.ts > requireAuth — the database is the authority > valid cookie + live session -> returns the DB's role and email, not the JWT claims
+     FAIL  src/lib/middleware/__tests__/require-auth.test.ts > requireWorkspaceAccess — SUPER_ADMIN bypass depends on the DB role only > DB says SUPER_ADMIN -> cross-workspace access without membership is preserved
+     FAIL  src/lib/middleware/__tests__/require-auth.test.ts > requireWorkspaceAccess — SUPER_ADMIN bypass depends on the DB role only > JWT says SUPER_ADMIN but DB says USER, and there is no membership -> FORBIDDEN; the workspace is never read through the bypass
+=== U3-skip-db ::       Tests  1 failed | 31 passed (32)
+         × session row deleted / expired / user deactivated (lookup returns null) -> UNAUTHENTICATED 9ms
+     FAIL  src/lib/middleware/__tests__/require-auth.test.ts > requireAuth — the database is the authority > session row deleted / expired / user deactivated (lookup returns null) -> UNAUTHENTICATED
+=== U4-no-strip ::       Tests  8 failed | 24 passed (32)
+         × API route, EXPIRED cookie 2ms
+         × API route, NO cookie 11ms
+         × API route, VALID cookie: forged values are removed and NO identity is injected in their place 1ms
+         × API route, cookie signed with the wrong secret 2ms
+         × API route, garbage cookie 3ms
+         × API route, tampered cookie 4ms
+         × header names are case-insensitive: mixed-case forgeries are removed too 1ms
+         × public page, no cookie 1ms
+=== U5-inject-identity ::       Tests  1 failed | 31 passed (32)
+         × API route, VALID cookie: forged values are removed and NO identity is injected in their place 6ms
+     FAIL  src/lib/middleware/__tests__/middleware-identity-headers.test.ts > middleware removes client-supplied identity headers on every path > API route, VALID cookie: forged values are removed and NO identity is injected in their place
+=== U6-strip-only-one ::       Tests  2 failed | 30 passed (32)
+         × API route, VALID cookie: forged values are removed and NO identity is injected in their place 8ms
+         × removes exactly the four identity headers, case-insensitively, and leaves the input untouched 1ms
+     FAIL  src/lib/middleware/__tests__/middleware-identity-headers.test.ts > middleware removes client-supplied identity headers on every path > API route, VALID cookie: forged values are removed and NO identity is injected in their place
+     FAIL  src/lib/middleware/__tests__/middleware-identity-headers.test.ts > withoutIdentityHeaders > removes exactly the four identity headers, case-insensitively, and leaves the input untouched
+=== U7-no-isactive ::       Tests  2 failed | 30 passed (32)
+         × binds the session id AND its user AND an unexpired row AND an ACTIVE user in one query 14ms
+         × looks up the pair taken from the VERIFIED cookie (never from a header) and never reads headers() 9ms
+     FAIL  src/lib/middleware/__tests__/require-auth.test.ts > requireAuth — the database is the authority > looks up the pair taken from the VERIFIED cookie (never from a header) and never reads headers()
+     FAIL  src/modules/auth/__tests__/session-identity.test.ts > resolveActiveSessionIdentity > binds the session id AND its user AND an unexpired row AND an ACTIVE user in one query

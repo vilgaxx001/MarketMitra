@@ -1,0 +1,16 @@
+PONG
+npx tsc --noEmit :: exit 0
+npx eslint . --ext .ts,.tsx :: exit 0 (0 bytes of output)
+npx vitest run :: exit 0
+REDIS_INTEGRATION_URL=redis://127.0.0.1:63799 npx vitest run :: exit 0
+vitest: files 52 tests 682 passed 674 failed 0 skipped 8
+vitest-redis: files 52 tests 682 passed 682 failed 0 skipped 0
+rm -rf .next && npx next build (gate/build.env; not 'npm run build') :: exit 0
+8a432b1198ff2d1dff2e053b73f3e88211ae39ea4aed75e2e1f257ae70fb169f  .next/static/css/94ae3875e273e4c6.css
+query-engine warnings in build log: 2
+fresh server pid 4702
+node scripts/http-verification/run.mjs (fresh server; WASM-substitute client) :: exit 0
+SUMMARY: 135/135 checks passed, 0 failed
+npm audit --omit=dev :: exit 0
+npm audit :: exit 1
+all {"info":0,"low":0,"moderate":0,"high":8,"critical":0,"total":8} prod {"info":0,"low":0,"moderate":0,"high":0,"critical":0,"total":0}

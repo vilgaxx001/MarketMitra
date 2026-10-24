@@ -1,0 +1,920 @@
+// =============================================================================
+// MarketMitra — Database Schema
+// =============================================================================
+// Design principles:
+//
+// 1. WORKSPACE ISOLATION IS STRUCTURAL, NOT OPTIONAL.
+//    Every tenant-owned table (Project, GeneratedContent, Subscription,
+//    Invoice, UsageEvent, AuditLog, etc.) carries a required `workspaceId`
+//    foreign key. There is no nullable "global" escape hatch — a row either
+//    belongs to a workspace or it belongs to the platform (User, Session).
+//    This is what the repository layer (src/modules/*/repository.ts) relies
+//    on to make cross-tenant data leakage a type error, not a runtime bug.
+//
+// 2. RBAC IS WORKSPACE-SCOPED, EXCEPT SUPER_ADMIN.
+//    A single User can belong to multiple Workspaces with a different role
+//    in each (via WorkspaceMember). SUPER_ADMIN is a platform-level flag on
+//    User itself, independent of workspace membership, for the internal
+//    admin panel.
+//
+// 3. BILLING IS GATEWAY-AGNOSTIC.
+//    Subscription/Invoice/PaymentAttempt store a `gateway` enum + the
+//    gateway's own IDs. Feature-gating code never needs to know whether a
+//    workspace pays via Razorpay or Stripe.
+//
+// 4. AI USAGE IS PROVIDER-AGNOSTIC AND FULLY AUDITABLE.
+//    GeneratedContent and UsageEvent record which provider/model produced
+//    a result, token counts, and cost — required for both the Admin Panel's
+//    "AI Usage" view (Module 9) and per-plan usage limits (Module 8).
+//
+// 5. SOFT DELETES ON USER-FACING CONTENT.
+//    GeneratedContent uses `deletedAt` instead of hard delete, so "Delete
+//    generated content" is reversible/auditable rather than destructive,
+//    matching production SaaS norms (and undo UX later).
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+/// Platform-level role. Only SUPER_ADMIN is platform-wide; everyone else's
+/// real permissions come from WorkspaceMember.role within each workspace.
+enum PlatformRole {
+  SUPER_ADMIN
+  USER
+}
+
+/// Workspace-scoped role — the core of the RBAC system.
+enum WorkspaceRole {
+  ADMIN // Full workspace control: billing, team, settings, all projects
+  TEAM_MEMBER // Create/edit projects, generate AI content. No billing/team access.
+  CLIENT // View/comment on shared projects only. No generation, no settings.
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum AIProviderName {
+  OPENAI
+  ANTHROPIC
+  GEMINI
+  GROK
+  DEEPSEEK
+}
+
+enum ContentType {
+  INSTAGRAM_POST
+  INSTAGRAM_REEL_SCRIPT
+  CONTENT_CALENDAR
+  SEO_KEYWORDS
+  SEO_BLOG_OUTLINE
+  AD_COPY
+  WHATSAPP_CAMPAIGN
+  GROWTH_STRATEGY
+  BRAND_POSITIONING
+  COMPETITOR_ANALYSIS
+  BUSINESS_IDEA
+  CHAT_MESSAGE
+}
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum BillingGateway {
+  RAZORPAY
+  STRIPE
+}
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+  INCOMPLETE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+  UNCOLLECTIBLE
+  REFUNDED
+}
+
+enum PaymentAttemptStatus {
+  CREATED
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  BILLING
+  TEAM
+  SYSTEM
+}
+
+/// -----------------------------------------------------------------------
+/// MODULE 4 — Workspace & Business enums
+/// -----------------------------------------------------------------------
+
+enum BusinessType {
+  PRODUCT
+  SERVICE
+  HYBRID
+}
+
+enum FileAssetCategory {
+  LOGO
+  BRAND_ASSET
+  DOCUMENT
+  IMAGE
+  OTHER
+}
+
+/// Malware-scan lifecycle for an uploaded file version. PENDING is the
+/// state every real upload starts in; CLEAN/INFECTED require a connected
+/// scanner (see src/modules/assets/scan-contract.ts — no scanner is wired
+/// in this environment, so uploads currently resolve straight to SKIPPED,
+/// never to a fabricated CLEAN).
+enum FileScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  SKIPPED
+}
+
+// =============================================================================
+// IDENTITY
+// =============================================================================
+
+model User {
+  id                String       @id @default(cuid())
+  email             String       @unique
+  emailVerifiedAt   DateTime?
+  passwordHash      String
+  name              String
+  avatarUrl         String?
+  platformRole      PlatformRole @default(USER)
+
+  // Account state
+  isActive          Boolean      @default(true)
+  lastLoginAt       DateTime?
+
+  // Relations
+  sessions               Session[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  workspaceMemberships    WorkspaceMember[]
+  ownedWorkspaces         Workspace[]              @relation("WorkspaceOwner")
+  sentInvites             TeamInvite[]              @relation("InviteSender")
+  generatedContent        GeneratedContent[]
+  auditLogs               AuditLog[]
+  notifications           Notification[]
+  createdBusinesses       BusinessProfile[]        @relation("BusinessCreatedBy")
+  createdAudienceSegments AudienceSegment[]        @relation("AudienceCreatedBy")
+  uploadedFileVersions    FileAssetVersion[]       @relation("FileVersionUploadedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash    String   @unique // hashed session token, never store raw
+  userAgent    String?
+  ipAddress    String?
+
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// =============================================================================
+// WORKSPACE (Organization) — the tenant boundary
+// =============================================================================
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+
+  ownerId   String
+  owner     User     @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+
+  // Branding (req: "Add business details", "Upload logo", "Upload brand colors")
+  // MODULE 4: was a 1:1 `businessProfile BusinessProfile?` — now 1:many,
+  // since a workspace supports multiple businesses (see BusinessProfile).
+  businesses BusinessProfile[]
+  fileAssets FileAsset[]
+
+  // Per-workspace AI provider override. NULL = use platform default (env.AI_PROVIDER).
+  preferredAIProvider AIProviderName?
+
+  // Relations — every tenant-owned table hangs off Workspace
+  members           WorkspaceMember[]
+  invites           TeamInvite[]
+  projects          Project[]
+  generatedContent  GeneratedContent[]
+  subscription      Subscription?
+  invoices          Invoice[]
+  usageEvents       UsageEvent[]
+  auditLogs         AuditLog[]
+  notifications     Notification[]
+  couponRedemptions CouponRedemption[]
+
+  isActive  Boolean  @default(true)
+  archivedAt DateTime?
+
+  /// MODULE 4 onboarding — real, persisted progress (never inferred/faked).
+  /// Step numbers correspond to src/modules/onboarding/validators.ts's
+  /// ONBOARDING_STEPS order. 0 = not started.
+  onboardingStep          Int       @default(0)
+  onboardingCompletedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([ownerId])
+  @@map("workspaces")
+}
+
+/// Join table giving a User a WorkspaceRole within a specific Workspace.
+/// This is the heart of the RBAC system — see src/modules/rbac/.
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role        WorkspaceRole @default(TEAM_MEMBER)
+
+  joinedAt    DateTime      @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@index([workspaceId])
+  @@map("workspace_members")
+}
+
+model TeamInvite {
+  id          String       @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  email       String
+  role        WorkspaceRole @default(TEAM_MEMBER)
+  status      InviteStatus @default(PENDING)
+
+  tokenHash   String       @unique
+
+  invitedById String
+  invitedBy   User         @relation("InviteSender", fields: [invitedById], references: [id])
+
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+
+  createdAt   DateTime     @default(now())
+
+  @@index([workspaceId])
+  @@index([email])
+  @@map("team_invites")
+}
+
+/// Business details captured per workspace — feeds every AI generation
+/// prompt with real brand context instead of generic output.
+///
+/// MODULE 4 NOTE: this model previously had `workspaceId @unique`, making
+/// it a one-per-workspace singleton. That's been removed — a workspace
+/// now has many BusinessProfile rows (multi-business), gated by
+/// `Plan.maxBusinesses`. Nothing in the codebase read the old
+/// `brandColors`/`brandVoice` fields (confirmed via full-repo grep before
+/// this change — the authenticated app shell was entirely unbuilt), so
+/// they've been removed in favor of the properly structured
+/// `BrandIdentity` relation below rather than kept as a redundant,
+/// looser-typed duplicate.
+model BusinessProfile {
+  id            String       @id @default(cuid())
+
+  workspaceId   String
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// URL-safe, unique per workspace — used in routes as
+  /// `/{workspaceSlug}/business/{businessSlug}/...`.
+  slug          String
+
+  createdById   String?
+  createdBy     User?        @relation("BusinessCreatedBy", fields: [createdById], references: [id])
+
+  businessName  String
+  description   String?
+  industry      String?
+  category      String?
+  businessType  BusinessType?
+
+  website       String?
+  country       String?
+  state         String?
+  city          String?
+  timeZone      String?
+  preferredLanguage String?  @default("en")
+  currency      String?      @default("INR")
+
+  targetMarket  String?      // free-text summary; structured segments live in AudienceSegment
+  businessGoals String[]     @default([])
+  primaryOfferings String[]  @default([]) // products/services
+  usp           String?      // unique selling proposition
+  marketingChallenges String[] @default([])
+  competitors   String[]     @default([])
+  /// e.g. { instagram: "https://instagram.com/...", whatsapp: "+91..." }
+  socialLinks   Json?
+
+  // Lifecycle
+  isActive      Boolean      @default(true)
+  archivedAt    DateTime?
+
+  // Relations
+  brandIdentity     BrandIdentity?
+  audienceSegments  AudienceSegment[]
+  fileAssets        FileAsset[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+  @@index([workspaceId, isActive])
+  @@map("business_profiles")
+}
+
+/// Structured brand identity — one per business. Deliberately typed
+/// fields (String[] for lists) rather than a single free-text blob, so
+/// the future Module 5 Business Context Engine consumer can rely on a
+/// stable shape instead of parsing prose.
+model BrandIdentity {
+  id            String   @id @default(cuid())
+
+  businessId    String   @unique
+  business      BusinessProfile @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  brandName     String?
+  logoAssetId   String?  @unique
+  logoAsset     FileAsset? @relation("BrandLogo", fields: [logoAssetId], references: [id])
+
+  primaryColor  String?  // hex, e.g. "#2563EB"
+  secondaryColor String?
+  accentColor   String?
+  typographyPreference String?
+
+  personality   String[] @default([]) // e.g. ["Bold", "Modern", "Approachable"]
+  tone          String?               // e.g. "Professional", "Friendly", "Luxury"
+  toneOfVoice   String?               // longer free-text description
+  wordsToUse    String[] @default([])
+  wordsToAvoid  String[] @default([])
+  brandValues   String[] @default([])
+  mission       String?
+  positioning   String?
+  tagline       String?
+  communicationStyle String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("brand_identities")
+}
+
+/// A reusable, named audience segment for a business. Multiple segments
+/// are supported; at most one is flagged `isPrimary` per business
+/// (enforced in src/modules/audience/service.ts via transaction, not a DB
+/// constraint — Postgres partial unique indexes aren't expressible in the
+/// installed Prisma schema syntax without a raw migration).
+model AudienceSegment {
+  id            String   @id @default(cuid())
+
+  businessId    String
+  business      BusinessProfile @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  createdById   String?
+  createdBy     User?    @relation("AudienceCreatedBy", fields: [createdById], references: [id])
+
+  name          String
+  description   String?
+  ageRange      String?  // e.g. "25-34"
+  location      String?
+  language      String?
+  interests     String[] @default([])
+  painPoints    String[] @default([])
+  needs         String[] @default([])
+  buyingMotivations String[] @default([])
+  objections    String[] @default([])
+  preferredPlatforms String[] @default([])
+  contentPreferences String[] @default([])
+  customerType  String?  // e.g. "B2B", "B2C", "D2C"
+  notes         String?
+
+  isPrimary     Boolean  @default(false)
+  isActive      Boolean  @default(true)
+  archivedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([businessId])
+  @@index([businessId, isActive])
+  @@map("audience_segments")
+}
+
+// =============================================================================
+// FILE ASSETS — S3-backed, versioned, SHA-256 deduplicated
+// =============================================================================
+// Every uploaded file is a FileAsset (the logical, named thing — "Acme Logo")
+// with one or more FileAssetVersion rows (the actual uploaded bytes at a
+// point in time). Re-uploading identical content (matched by sha256Hash)
+// reuses the existing `storageKey` instead of writing a duplicate S3
+// object — see src/modules/assets/service.ts for the dedup lookup.
+// =============================================================================
+
+model FileAsset {
+  id            String   @id @default(cuid())
+
+  workspaceId   String
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// Nullable — workspace-level documents (e.g. a shared brand guideline
+  /// PDF) aren't tied to one business; logo/brand assets are.
+  businessId    String?
+  business      BusinessProfile? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  category      FileAssetCategory @default(OTHER)
+  name          String   // display name, editable independent of the original filename
+
+  versions      FileAssetVersion[] @relation("AssetVersions")
+
+  currentVersionId String? @unique
+  currentVersion    FileAssetVersion? @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+
+  brandLogoFor  BrandIdentity? @relation("BrandLogo")
+
+  isArchived    Boolean  @default(false)
+  archivedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([businessId])
+  @@index([workspaceId, isArchived])
+  @@map("file_assets")
+}
+
+model FileAssetVersion {
+  id            String   @id @default(cuid())
+
+  fileAssetId   String
+  fileAsset     FileAsset @relation("AssetVersions", fields: [fileAssetId], references: [id], onDelete: Cascade)
+
+  currentFor    FileAsset? @relation("CurrentVersion")
+
+  versionNumber Int
+
+  // Storage — S3 key is content-addressed-adjacent: real objects are
+  // deduplicated by sha256Hash (see service.ts), so two versions with
+  // identical content share one storageKey.
+  storageKey    String
+  sha256Hash    String
+  originalFilename String
+  mimeType      String   // server-verified via magic-byte sniffing, never trusted from the client Content-Type alone
+  sizeBytes     Int
+
+  scanStatus    FileScanStatus @default(PENDING)
+
+  uploadedById  String?
+  uploadedBy    User?    @relation("FileVersionUploadedBy", fields: [uploadedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([fileAssetId])
+  @@index([sha256Hash])
+  @@map("file_asset_versions")
+}
+
+// =============================================================================
+// PROJECTS & AI-GENERATED CONTENT
+// =============================================================================
+
+model Project {
+  id          String   @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  generatedContent GeneratedContent[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  @@index([workspaceId])
+  @@index([workspaceId, deletedAt])
+  @@map("projects")
+}
+
+model GeneratedContent {
+  id          String        @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  projectId   String?
+  project     Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  createdById String
+  createdBy   User          @relation(fields: [createdById], references: [id])
+
+  type        ContentType
+  status      ContentStatus @default(DRAFT)
+
+  title       String
+  // Structured body — shape depends on `type`, validated at the module layer
+  // via Zod schemas in src/modules/ai/validators.ts before being persisted.
+  body        Json
+
+  // Provenance — which AI provider/model actually produced this, for
+  // auditability, the Admin "AI Usage" view, and regenerate-with-same-config.
+  aiProvider  AIProviderName?
+  aiModel     String?
+  promptTokens     Int?
+  completionTokens Int?
+
+  // Versioning — editing content creates a new version row pointing back,
+  // rather than overwriting history.
+  version     Int           @default(1)
+  previousVersionId String? @unique
+  previousVersion    GeneratedContent? @relation("ContentVersionChain", fields: [previousVersionId], references: [id])
+  nextVersion        GeneratedContent? @relation("ContentVersionChain")
+
+  shareLinks  ShareLink[]
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deletedAt   DateTime?     // soft delete — see schema header notes
+
+  @@index([workspaceId])
+  @@index([workspaceId, deletedAt])
+  @@index([workspaceId, type])
+  @@index([projectId])
+  @@map("generated_content")
+}
+
+/// Public/unlisted share links for "Share generated content".
+model ShareLink {
+  id                 String   @id @default(cuid())
+
+  generatedContentId String
+  generatedContent   GeneratedContent @relation(fields: [generatedContentId], references: [id], onDelete: Cascade)
+
+  token              String   @unique
+  isActive           Boolean  @default(true)
+  expiresAt          DateTime?
+  viewCount          Int      @default(0)
+
+  createdAt          DateTime @default(now())
+
+  @@index([generatedContentId])
+  @@map("share_links")
+}
+
+// =============================================================================
+// BILLING — gateway-agnostic (Razorpay primary / Stripe secondary)
+// =============================================================================
+
+model Plan {
+  id              String   @id @default(cuid())
+  key             String   @unique // "starter" | "growth" | "agency" — stable identifier used in code
+  name            String
+  description     String?
+
+  // Pricing in smallest currency unit (paise / cents) to avoid float errors
+  priceMonthlyINR Int
+  priceYearlyINR  Int
+  priceMonthlyUSD Int
+  priceYearlyUSD  Int
+
+  // Plan capability matrix — read by requireFeature/usageLimit middleware
+  features        Json     // e.g. { whatsapp: true, apiAccess: false, maxSeats: 1 }
+  maxWorkspaceSeats     Int
+  maxGenerationsPerMonth Int? // null = unlimited
+  /// Max active (non-archived) businesses a workspace on this plan may have.
+  /// Enforced server-side in src/modules/business/service.ts — see
+  /// docs/WORKSPACE_AND_BUSINESS.md "Plan limit enforcement".
+  maxBusinesses          Int      @default(1)
+
+  isActive        Boolean  @default(true)
+  sortOrder       Int      @default(0)
+
+  subscriptions   Subscription[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("plans")
+}
+
+model Subscription {
+  id     String @id @default(cuid())
+
+  workspaceId String   @unique
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   Plan   @relation(fields: [planId], references: [id])
+
+  gateway               BillingGateway
+  gatewayCustomerId     String?
+  gatewaySubscriptionId String?        @unique
+
+  interval   BillingInterval
+  status     SubscriptionStatus @default(TRIALING)
+
+  trialEndsAt        DateTime?
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean  @default(false)
+  canceledAt         DateTime?
+
+  invoices    Invoice[]
+  paymentAttempts PaymentAttempt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([gatewaySubscriptionId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id     String @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  gateway          BillingGateway
+  gatewayInvoiceId String?        @unique
+
+  invoiceNumber String  @unique // human-readable, sequential per workspace e.g. MM-2025-000123
+  status        InvoiceStatus @default(OPEN)
+
+  subtotal      Int     // smallest currency unit
+  discount      Int     @default(0)
+  tax           Int     @default(0) // GST for Indian invoices
+  total         Int
+  currency      String  // "INR" | "USD"
+
+  couponId      String?
+  coupon        Coupon? @relation(fields: [couponId], references: [id])
+
+  pdfUrl        String? // generated invoice PDF, stored in S3
+
+  issuedAt      DateTime @default(now())
+  paidAt        DateTime?
+  dueAt         DateTime?
+
+  paymentAttempts PaymentAttempt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([status])
+  @@map("invoices")
+}
+
+model PaymentAttempt {
+  id     String @id @default(cuid())
+
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id])
+
+  gateway           BillingGateway
+  gatewayPaymentId  String?        @unique
+  gatewayOrderId    String?
+
+  amount   Int
+  currency String
+  status   PaymentAttemptStatus @default(CREATED)
+
+  failureReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([gatewayPaymentId])
+  @@map("payment_attempts")
+}
+
+/// Idempotency ledger for incoming gateway webhooks. Every webhook handler
+/// MUST check this table before mutating Subscription/Invoice state, and
+/// insert a row atomically with that mutation — this is what prevents
+/// double-processing on gateway retries.
+model WebhookEvent {
+  id            String         @id @default(cuid())
+  gateway       BillingGateway
+  eventId       String         // gateway's own event ID
+  eventType     String
+  payload       Json
+  processedAt   DateTime?
+  createdAt     DateTime       @default(now())
+
+  @@unique([gateway, eventId])
+  @@map("webhook_events")
+}
+
+model Coupon {
+  id          String     @id @default(cuid())
+  code        String     @unique
+  type        CouponType
+  value       Int        // percentage (0-100) or fixed amount in smallest unit
+  maxRedemptions   Int?
+  redemptionCount  Int        @default(0)
+  validFrom   DateTime   @default(now())
+  validUntil  DateTime?
+  isActive    Boolean    @default(true)
+
+  redemptions CouponRedemption[]
+  invoices    Invoice[]
+
+  createdAt DateTime @default(now())
+
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id          String   @id @default(cuid())
+
+  couponId    String
+  coupon      Coupon   @relation(fields: [couponId], references: [id])
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  redeemedAt  DateTime @default(now())
+
+  @@unique([couponId, workspaceId])
+  @@map("coupon_redemptions")
+}
+
+// =============================================================================
+// USAGE TRACKING (analytics + plan limit enforcement)
+// =============================================================================
+
+model UsageEvent {
+  id          String   @id @default(cuid())
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  eventType   String   // "ai_generation" | "export" | "share" | ...
+  metadata    Json?    // { contentType, aiProvider, tokensUsed, ... }
+
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, eventType, createdAt])
+  @@map("usage_events")
+}
+
+// =============================================================================
+// CROSS-CUTTING: Audit log, Notifications
+// =============================================================================
+
+model AuditLog {
+  id          String   @id @default(cuid())
+
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  actorId     String?
+  actor       User?    @relation(fields: [actorId], references: [id])
+
+  action      String   // "workspace.created" | "member.invited" | "content.deleted" | ...
+  targetType  String?
+  targetId    String?
+  metadata    Json?
+
+  ipAddress   String?
+
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id          String           @id @default(cuid())
+
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  workspaceId String?
+  workspace   Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  type        NotificationType @default(INFO)
+  title       String
+  body        String?
+  actionUrl   String?
+
+  readAt      DateTime?
+
+  createdAt   DateTime         @default(now())
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}

@@ -1,0 +1,1 @@
+start-app.sh with raw log relocated to RUNNER_TEMP: gate exit 0; evidence dir has no *.raw.log (checked: 0 found). Ran on the sandbox's existing generated client; exercised no database query.

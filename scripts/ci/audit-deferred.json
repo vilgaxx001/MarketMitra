@@ -1,0 +1,16 @@
+{
+  "_comment": "Dispositions of advisories that are KNOWN, reviewed and DEFERRED. Every entry must be dev-only (checked against package-lock.json on every run). Adding an entry needs a written justification and a reviewer; an advisory outside this list FAILS the audit gate. This list does not make the dependency tree vulnerability-free.",
+  "reviewed": "2026-10-21",
+  "disposition_source": "PRE_5C_FINAL_CLOSURE_REPORT.md and PRE_5C_RELEASE_GATE_REPORT.md",
+  "maxSeverity": "high",
+  "packages": {
+    "braces": "GHSA-vfj7-8cjw-p6xm; no patched release. Root cause of the chain below. Reachable only through lint/build tooling.",
+    "micromatch": "Depends on braces (same root cause); dev-only.",
+    "fast-glob": "Depends on micromatch (same root cause); dev-only.",
+    "chokidar": "Depends on braces (same root cause); only inside tailwindcss' file watcher; dev-only.",
+    "tailwindcss": "Pulled in by chokidar/fast-glob (same root cause); a Tailwind major migration is out of scope; build-time only.",
+    "tailwindcss-animate": "Depends on tailwindcss (same root cause); build-time only.",
+    "eslint-config-next": "Depends on @next/eslint-plugin-next / fast-glob (same root cause); the offered fix is a semver-major DOWNGRADE (14.2.35), rejected; lint-only.",
+    "@next/eslint-plugin-next": "Depends on fast-glob (same root cause); lint-only."
+  }
+}

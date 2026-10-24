@@ -1,0 +1,18 @@
+npx tsc --noEmit :: exit 0
+npx eslint . --ext .ts,.tsx :: exit 0
+npx vitest run (no REDIS_INTEGRATION_URL) :: exit 0
+REDIS_INTEGRATION_URL=redis://127.0.0.1:63799 npx vitest run :: exit 0
+npx eslint . --ext .ts,.tsx :: exit 0
+npx tsc --noEmit (re-run after lint fix) :: exit 0
+npx vitest run (no REDIS_INTEGRATION_URL, after lint fix) :: exit 0
+REDIS_INTEGRATION_URL=redis://127.0.0.1:63799 npx vitest run (after lint fix) :: exit 0
+clean .next + npx next build (env: gate/build.env) :: exit 0
+8a432b1198ff2d1dff2e053b73f3e88211ae39ea4aed75e2e1f257ae70fb169f  .next/static/css/94ae3875e273e4c6.css
+node scripts/http-verification/run.mjs (fresh server, fixed build) :: exit 0
+npm audit :: exit 1
+npm audit --omit=dev :: exit 0
+npx prisma --version :: exit 1
+npx prisma validate :: exit 1
+npx prisma generate :: exit 1
+DATABASE_URL=postgresql://<redacted> DIRECT_URL=postgresql://<redacted> npx prisma migrate deploy :: exit 1
+npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url postgresql://<redacted> --exit-code :: exit 1
