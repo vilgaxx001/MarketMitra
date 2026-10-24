@@ -8,6 +8,7 @@
 # Needs a runner that can reach the official Prisma engine host (binaries.prisma.sh:443) or an explicitly approved, pinned
 # https mirror set in the repository VARIABLE PRISMA_ENGINES_MIRROR. See PRE_5C_CI_VERIFICATION_GUIDE.md.
 # No repository secret is required.
+# To run: Actions tab > pre5c-release-gate > Run workflow (workflow_dispatch). It must exist on the repository's default branch to be listed.
 name: pre5c-release-gate
 
 on:
