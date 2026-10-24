@@ -174,3 +174,17 @@ describe("verify-action-pins.mjs", () => {
     for (const u of uses) expect(classify(u), `${u.ref} (line ${u.line})`).toMatchObject({ ok: true });
   });
 });
+
+describe("workflow artifact upload", () => {
+  it("uploads the dot-directory evidence folder with include-hidden-files (upload-artifact skips hidden files by default)", async () => {
+    const fs = await import("node:fs");
+    const text = fs.readFileSync(path.join(root, ".github/workflows/pre5c-release-gate.yml"), "utf8");
+    const m = text.match(/uses: actions\/upload-artifact@[0-9a-f]{40}[^\n]*\n\s+if: always\(\)[\s\S]*$/) ?? text.match(/actions\/upload-artifact@[0-9a-f]{40}[\s\S]*$/);
+    expect(m, "upload-artifact step not found").not.toBeNull();
+    const step = (m as RegExpMatchArray)[0];
+    const uploadPath = /\n\s+path:\s*(\S+)/.exec(step)?.[1] ?? "";
+    expect(uploadPath).toBe(".ci-evidence/");
+    expect(step).toMatch(/\n\s+include-hidden-files:\s*true\s*(\n|$)/);
+    expect(step).toMatch(/\n\s+if-no-files-found:\s*error/);
+  });
+});

@@ -219,5 +219,8 @@ jobs:
         with:
           name: pre5c-gate-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: .ci-evidence/
+          # .ci-evidence is a dot-directory: upload-artifact >= 4.4 EXCLUDES hidden files by default, which made the first real run upload nothing.
+          # The directory holds only redacted logs/JSON written by scripts/ci (no .env, no raw server log).
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
