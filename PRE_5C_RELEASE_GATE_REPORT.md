@@ -1,8 +1,8 @@
 # MarketMitra — Final Pre-5C Release Gate Closure Report
 
-**Verdict: `ENVIRONMENT-UNVERIFIED — CI EXECUTION OR REQUIRED GATES BLOCKED`**
+**Verdict: `PASS — READY FOR FINAL KILLCRITIC REVIEW`** (see §14: real GitHub Actions run 40193097977, commit `c851f6bb31bbdfcd39c25897245c16be6bca6041`, all 19 required gates exit 0; condition: the uploaded evidence artifact must still be downloaded and read by the reviewer, §14.5)
 
-*(Previous headline: `ENVIRONMENT-UNVERIFIED — AUTHORITATIVE GATE BLOCKED`. The substance is unchanged: the authoritative gates are still blocked here. A CI workflow to close them has now been prepared (§12) but has **not been executed**. The body below (§1–§11) is the earlier closure report, preserved unchanged; the pre-edit copy is `docs/history/PRE_5C_RELEASE_GATE_REPORT_2026-10-22_before-ci-workflow.md`.)*
+*(Earlier headlines: `ENVIRONMENT-UNVERIFIED — AUTHORITATIVE GATE BLOCKED`, then `ENVIRONMENT-UNVERIFIED — CI EXECUTION OR REQUIRED GATES BLOCKED`. Sections 1 to 13 are the history written while those verdicts held and are preserved unchanged; where they say a gate is BLOCKED, §14 supersedes them. The substance is unchanged: the authoritative gates are still blocked here. A CI workflow to close them has now been prepared (§12) but has **not been executed**. The body below (§1–§11) is the earlier closure report, preserved unchanged; the pre-edit copy is `docs/history/PRE_5C_RELEASE_GATE_REPORT_2026-10-22_before-ci-workflow.md`.)*
 
 The pinned Prisma 6.2.1 CLI cannot run in this environment (policy-denied `403` for `binaries.prisma.sh`), so the authoritative Prisma, migration/drift, genuine-client TypeScript/build and genuine-client HTTP gates are **BLOCKED**, not passed. No substitute result is counted as a pass. All checks that *can* run here pass, and I found no unresolved code defect (three defects found in this run were fixed, §6). Module 5C was not started. This report supersedes `docs/history/PRE_5C_RELEASE_GATE_REPORT_2026-10-18.md` (same filename, earlier task) and the numbers in `PRE_5C_SECURITY_AND_FINAL_GATE_REPORT.md` (e.g. its 127-check count is now 135).
 
@@ -200,3 +200,52 @@ Executed in this pass (real exit codes in `docs/evidence/pre5c-ci-pins/exit-code
 Defect found and fixed (CI, not app): the raw server log was written inside the uploaded evidence directory; it now lives in `$RUNNER_TEMP`, outside it. This was verified only by running `start-app.sh` locally (no `*.raw.log` in the evidence directory), not on a runner.
 
 Remaining limitations: all three pinned actions use the `node20` action runtime and newer majors were not evaluated; service images remain tag-pinned; no CODEOWNERS/Dependabot yet; whether the runner can fetch the pinned SHAs is unproven until a real run. See guide §9 and §12. Application behaviour, Prisma schema, migrations and dependencies are unchanged. Module 5C is not started.
+
+## 14. Addendum 3: genuine CI execution (2026-10-24/25)
+
+Repository `vilgaxx001/MarketMitra` (public). Branch `ci/pre5c-gate`, which is also the repository's **default branch** (the repository was empty; the first pushed branch became the default). There is no `main`, so the workflow's `pull_request: branches [main]` trigger is inactive; `workflow_dispatch` is what was used.
+
+### 14.1 Runs (all `workflow_dispatch`, all on GitHub-hosted `ubuntu-24.04`, Node 22.22.0, npm 10.9.4, `postgres:16.4`, `redis:7.2.5`)
+
+| # | Run ID | Commit | Result | Explanation (evidence) |
+|---|---|---|---|---|
+| 1 | 40123293669 | `0747982` | **failure** | Steps 1 to 30 succeeded. `audit-policy` (E3) failed; Finalize failed (summary exit 1); artifact upload failed with the annotation "No files were found with the provided path: .ci-evidence/". Root causes below. No artifact |
+| 2 | 40123824155 | `781d693` | **failure** | `next` bumped; upload fixed (artifact `pre5c-gate-evidence-40123824155-1` produced); `audit-policy` still failed (production `openai`, `zod`) |
+| 3 | 40124130633 | `c5a37ef` | **failure** | Added check-run annotations of the recorded results: 18 of 19 required gates exit 0; only `audit-policy` FAIL: "production dependencies have 2 vulnerabilities: openai, zod". vitest 717/717, HTTP 135/135 |
+| 4 | **40193097977** | **`c851f6bb31bbdfcd39c25897245c16be6bca6041`** | **success** | All 19 required gates exit 0; 37/37 steps success, 0 skipped. Artifact `pre5c-gate-evidence-40193097977-1` (id 12599010965, 88,629 bytes, `sha256:5b6b33861aa2a84738fb13a87f3feec8f22fd5f89ad331911654c735f3a0beca` as reported by GitHub). URL: https://github.com/vilgaxx001/MarketMitra/actions/runs/40193097977 |
+
+No retry hid a failure: runs 1 to 3 failed for the reasons below, each fixed by a code or configuration change, not by re-running.
+
+### 14.2 Defects found by the real runs, and fixes
+
+1. **Workflow was not listed under Actions** (before run 1). Evidence: file present at the same blob SHA `633a2d80…` on the default branch, the branch and the commit; valid per `actionlint` and the official GitHub workflow JSON schema (`check-jsonschema`); no BOM/tabs/CRLF; yet the Actions API showed 0 workflows, 0 runs, 0 check-runs. A second push that touched the file registered it (workflow id 395347418, active). **Cause not directly observable from here; the working explanation is that GitHub did not index the workflow from the very first push into the empty repository.** Fix: a comment-only commit touching the file.
+2. **Evidence artifact was empty** (run 1). `.ci-evidence/` is a dot-directory and `upload-artifact` >= 4.4 excludes hidden files by default. Fix: `include-hidden-files: true` (commit `60f5971`), plus a regression test.
+3. **Production dependency advisories** (runs 1 to 3), advisories published after the previous audit (2026-10-14), reproduced locally with `npm audit` on the committed lockfile:
+   * `next` 15.5.27: GHSA-2464-fhr4-w9xw (critical, Image Optimization API RCE with SVG) and GHSA-p3m5-59mp-jv5r (high, Server Actions DoS). Fixed release for the 15.5 line per the Next.js 14 Oct 2026 security update: **15.5.28** (commit `781d693`; lock change limited to `next`, `@next/env`, `@next/swc-*`).
+   * `zod` < 4.6.6: GHSA-mrhx-c7xc-m3w5 (high, memory exhaustion validating large arrays; the upstream-described code path is in zod 4's `$ZodArray`, and the advisory range has no lower bound, so npm flags 3.x; I did not prove whether 3.24.1 is actually exploitable). `openai` 4.78.1 was flagged only through its optional `zod ^3` peer. The only npm-offered fix was a major upgrade. **Decision approved by the owner: upgrade** to `zod` 4.6.7 and `openai` 6.49.0 (commit `c851f6b`). The audit policy and `audit-deferred.json` were **not** loosened. After the upgrade `npm audit` reports 0 production and 0 total vulnerabilities (the 8 dev-only advisories previously deferred are no longer reported).
+4. **Regression caused by the zod 4 upgrade, caught by an existing security test**: `validators.test.ts` "rejects invalid or oversized metadata" failed, because zod 4 silently drops an own `__proto__` key from record input instead of rejecting it. Fixed in `src/modules/ai/memory/validators.ts` by rejecting `__proto__` explicitly on the raw input before the record is parsed; the test is unchanged.
+5. `openai` 6 requires a `Headers` object in its error constructors: six test call sites changed from `{}` to `new Headers()` (tests only).
+
+### 14.3 Required gates in the passing run (read from GitHub's step conclusions and from the workflow's own recorded summary, published as check-run annotations)
+
+All 19 required gates recorded exit 0: env-guard, npm-ci, harness-npm-ci, db-create, prisma-version, prisma-validate, prisma-generate, genuine-client-static, prisma-migrate-deploy, genuine-client-runtime, prisma-drift, existing-install-rehearsal, tsc, lint, vitest-with-redis, build, app-start, http-suite, audit-policy.
+
+| Fact | Value (as recorded by the run) |
+|---|---|
+| Prisma CLI / client / engines commit | 6.2.1 / 6.2.1 / `4123509d24aa4dede1e864b46351bf2790323b69` |
+| vitest (real Redis) | 717 total, 717 passed, 0 failed, 0 failed files, 0 skipped, 0 todo, success=true |
+| HTTP suite (genuine client, no preload) | 135 checks, 135 passed, 0 failed |
+| Audit | production 0, all 0, policy ok |
+| Source digest recorded by CI | `5d6c8a5d3611d00dd09fd3dd7ba7771e074d352bd8b71a25ba983a74db59c28f` over 449 files; **I recomputed it from `git archive c851f6b…` and it is identical** |
+
+### 14.4 Remaining limitations
+
+* **I could not download or open the evidence artifact**: this session's proxy blocks the blob-storage host that serves artifact and log downloads. Everything in §14.3 is from the GitHub API (step conclusions) and from annotations the workflow printed from its own recorded files. Individual gate logs, `source-files.sha256` and the raw JSON files have **not** been read by me.
+* The repository's default branch is the CI branch; no PR to an existing default branch was possible. Renaming it to `main` is the owner's decision.
+* Actions run on Node 20 and are being forced to Node 24 by GitHub (warning on every run); newer action majors not evaluated. Service images are tag-pinned.
+* Synthetic disposable data only: this does **not** prove migration safety on production data. Live AI, email, storage, billing and browser behaviour are not exercised. No failure from runs 1 to 3 is left unexplained.
+* The three zod/openai major-version changes were validated by the existing 717 tests and the 135 HTTP checks only; there was no manual review of every schema's error-message text.
+
+### 14.5 Condition for the verdict
+
+`PASS — READY FOR FINAL KILLCRITIC REVIEW` means the run is genuine, every required gate passed on the intended revision, and nothing unexplained remains. It is not the final sign-off: KILLCRITIC must download `pre5c-gate-evidence-40193097977-1`, read `SUMMARY.md`, `gates.tsv` and the gate logs, and confirm they match §14.3. Module 5C remains on hold until that review.

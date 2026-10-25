@@ -73,3 +73,22 @@ Baseline: `marketmitra-app-pre5c-ci-workflow.zip`, sha256 `83cef9a148a54e2592354
 ## Unresolved
 
 None of the three actions is unresolved. Not done: Docker image digests for the service containers, CODEOWNERS, Dependabot for actions, evaluation of newer action majors.
+
+---
+
+# Change log, pass 3: first real CI runs (repository `vilgaxx001/MarketMitra`, branch `ci/pre5c-gate`)
+
+Commits after the initial import `9153347`: `0747982` (workflow comment; registers the workflow), `60f5971` (upload dot-directory), `781d693` (next 15.5.28), `c5a37ef` (annotations), `c851f6b` (zod 4 / openai 6). The initial import omitted 41 git-ignored files (evidence `*.log`, `next-env.d.ts`) and changed `.env.example` placeholders `sk_test_xxxx…` / `pk_test_xxxx…` to `…_REPLACE_WITH_YOUR_KEY` because GitHub push protection flagged the first as a Stripe key.
+
+| File | Change and why |
+|---|---|
+| `.env.example` | Stripe placeholder no longer shaped like a key (push protection blocked the push) |
+| `.github/workflows/pre5c-release-gate.yml` | run-instructions comment; `include-hidden-files: true` on the evidence upload (run 1 uploaded nothing); `CI_EMIT_ANNOTATIONS=1` on the summary step |
+| `scripts/ci/summarize.mjs` | `annotations()` / `escData()`: prints the recorded results as check-run annotations |
+| `src/lib/__tests__/ci-scripts.test.ts` | +2 describe blocks: upload step keeps `include-hidden-files`; annotation escaping and content |
+| `package.json`, `package-lock.json` | `next` 15.5.27 to 15.5.28 (GHSA-2464-fhr4-w9xw critical, GHSA-p3m5-59mp-jv5r high); `zod` 3.24.1 to 4.6.7 and `openai` 4.78.1 to 6.49.0 (GHSA-mrhx-c7xc-m3w5). Lock diffs limited to those packages and openai's formerly nested types. **Dependency versions changed because real runs reproduced the advisories** |
+| `src/modules/ai/memory/validators.ts` | metadata rejects an own `__proto__` key explicitly on raw input (zod 4 silently drops it). Security behaviour preserved; the existing test is unchanged |
+| `src/modules/ai/core/__tests__/provider-error-normalization.test.ts`, `streaming-normalization.test.ts` | `{}` to `new Headers()` in openai error constructors (openai 6 types) |
+| `PRE_5C_RELEASE_GATE_REPORT.md`, `PRE_5C_CI_VERIFICATION_GUIDE.md`, this file | results, run history, limitations |
+
+Not changed: Prisma schema, migrations, the audit policy and `audit-deferred.json`, `env-guard`, test-completeness checks, genuine-client assertions, drift/HTTP checks, security assertions.

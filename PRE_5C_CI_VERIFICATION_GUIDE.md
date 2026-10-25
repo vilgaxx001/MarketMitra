@@ -1,6 +1,6 @@
 # MarketMitra: Pre-5C CI Verification Guide
 
-**Status of this workflow: PREPARED, NEVER EXECUTED.** It was written and checked offline (YAML linted with `actionlint`, helper scripts self-tested, see §12). It has not run on any CI runner, and the author cannot run it: the authoring sandbox cannot reach `binaries.prisma.sh`, and has no GitHub Actions access. Until a real run exists, the Pre-5C verdict stays `ENVIRONMENT-UNVERIFIED — CI EXECUTION OR REQUIRED GATES BLOCKED`. Nothing in this guide is a test result.
+**Status of this workflow:** executed on GitHub Actions. Run 4 (`40193097977`, commit `c851f6bb31bbdfcd39c25897245c16be6bca6041`) passed all 19 required gates; runs 1 to 3 failed for reasons that were fixed (see "Run history" below and `PRE_5C_RELEASE_GATE_REPORT.md` §14). That run's evidence artifact has still to be read by the final reviewer.
 
 The workflow only **verifies**. It never deploys, publishes, pushes, tags or writes to any environment other than its own throw-away services.
 
@@ -150,3 +150,19 @@ Verdict mapping for the reviewer (never written by the workflow): all required g
 Executed locally (evidence in `docs/evidence/pre5c-ci-prep/` and, for the action-pinning pass, `docs/evidence/pre5c-ci-pins/` with real exit codes in `exit-codes.txt`): `actionlint` on the workflow (0 findings); `scripts/ci/verify-action-pins.mjs` online and offline (exit 0); `scripts/ci/selftest.sh` (33 checks of the helper scripts' fail-closed behaviour); 33 new vitest tests for the helper logic (mutation-checked); `tsc`, `eslint`, and the full vitest suite with real Redis (715/715, 0 skipped in the latest run); production `next start` with `NODE_OPTIONS` unset and the env-file written by `write-env.sh`.
 
 **Not verified (cannot run here):** the workflow on a real runner; `npm ci` with lifecycle scripts; every Prisma 6.2.1 command; `assert-genuine-client.mjs` success paths (its runtime check needs the migrated schema; the workflow orders it after `migrate deploy`); `existing-install-rehearsal.mjs` end to end (it drives the real CLI); the Postgres/Redis service containers and health checks; whether GitHub can fetch the three pinned action SHAs on your runner (they exist upstream, but no Actions run has resolved them); `npm audit` output against the live advisory database; artifact upload.
+
+## 13. Run history and behaviours learned from the real runs
+
+| Run | Commit | Result | Lesson |
+|---|---|---|---|
+| 1 `40123293669` | `0747982` | failure | `audit-policy` correctly failed on new advisories (`next`, `zod`); the artifact upload found nothing because `.ci-evidence/` is a **dot-directory** and `upload-artifact` >= 4.4 skips hidden files unless `include-hidden-files: true` is set |
+| 2 `40123824155` | `781d693` | failure | upload fixed; `zod`/`openai` advisories remained |
+| 3 `40124130633` | `c5a37ef` | failure | 18 of 19 required gates passed; only `audit-policy` failed |
+| 4 `40193097977` | `c851f6b` | **success** | all 19 required gates exit 0; vitest 717/717 (0 skipped), HTTP 135/135, audit 0/0 |
+
+* **First push into an empty repository was not indexed by Actions** (0 workflows listed although the file was present and valid). A later push touching the workflow file registered it. If a workflow does not appear after the first push, push a small change to the workflow file before debugging further. The cause on GitHub's side was not directly observable.
+* **The repository's default branch is the CI branch** (`ci/pre5c-gate`) because the repository was empty. `pull_request: branches [main]` does nothing until a `main` branch exists; use *Run workflow* (`workflow_dispatch`).
+* **Reading results without downloading the artifact.** The summary step prints the recorded results as check-run annotations (environment, per-gate status, vitest/HTTP counts, audit problems). Read them with `gh api repos/<owner>/<repo>/check-runs/<job_id>/annotations`. They contain only facts the run recorded; the artifact remains the primary evidence.
+* **Audit results change over time.** Runs 1 to 3 failed because advisories were published after the last local audit. `audit-policy` is a required gate by design; do not loosen it to get green.
+* **Source digest.** The digest is of the tracked files. A local working directory that contains git-ignored files will give a different value; compute it from `git archive <commit>` extracted to an empty directory. The digest of `c851f6b` is `5d6c8a5d3611d00dd09fd3dd7ba7771e074d352bd8b71a25ba983a74db59c28f` (449 files), identical to the value the run recorded.
+* GitHub warns on every run that the three pinned actions target Node 20 and are forced to Node 24. Newer action majors have not been evaluated.
