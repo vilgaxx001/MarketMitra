@@ -9,28 +9,28 @@ import { AICoreError } from "@/modules/ai/core/types/errors";
 
 describe("OpenAI error normalization", () => {
   it("AuthenticationError -> AUTHENTICATION_ERROR", () => {
-    const n = normalizeOpenAIError(new OpenAI.AuthenticationError(401, undefined, "Invalid API key", {}), "gpt-4o");
+    const n = normalizeOpenAIError(new OpenAI.AuthenticationError(401, undefined, "Invalid API key", new Headers()), "gpt-4o");
     expect(n).toBeInstanceOf(AICoreError);
     expect(n.code).toBe("AUTHENTICATION_ERROR");
     expect(n.retryable).toBe(false);
   });
   it("RateLimitError -> RATE_LIMITED (retryable)", () => {
-    const n = normalizeOpenAIError(new OpenAI.RateLimitError(429, undefined, "Rate limit exceeded", {}), "gpt-4o");
+    const n = normalizeOpenAIError(new OpenAI.RateLimitError(429, undefined, "Rate limit exceeded", new Headers()), "gpt-4o");
     expect(n.code).toBe("RATE_LIMITED");
     expect(n.retryable).toBe(true);
   });
   it("context-length BadRequestError -> CONTEXT_LIMIT_EXCEEDED", () => {
-    const n = normalizeOpenAIError(new OpenAI.BadRequestError(400, undefined, "This model's maximum context length is 128000 tokens", {}), "gpt-4o");
+    const n = normalizeOpenAIError(new OpenAI.BadRequestError(400, undefined, "This model's maximum context length is 128000 tokens", new Headers()), "gpt-4o");
     expect(n.code).toBe("CONTEXT_LIMIT_EXCEEDED");
   });
   it("generic BadRequestError -> INVALID_REQUEST", () => {
-    expect(normalizeOpenAIError(new OpenAI.BadRequestError(400, undefined, "Invalid parameter", {}), "gpt-4o").code).toBe("INVALID_REQUEST");
+    expect(normalizeOpenAIError(new OpenAI.BadRequestError(400, undefined, "Invalid parameter", new Headers()), "gpt-4o").code).toBe("INVALID_REQUEST");
   });
   it("APIConnectionTimeoutError -> TIMEOUT", () => {
     expect(normalizeOpenAIError(new OpenAI.APIConnectionTimeoutError(), "gpt-4o").code).toBe("TIMEOUT");
   });
   it("never lets raw SDK error escape", () => {
-    const n = normalizeOpenAIError(new OpenAI.AuthenticationError(401, undefined, "x", {}), "gpt-4o");
+    const n = normalizeOpenAIError(new OpenAI.AuthenticationError(401, undefined, "x", new Headers()), "gpt-4o");
     expect(n.details.provider).toBe("openai");
     expect(n.details.fromProvider).toBe(true);
   });

@@ -75,7 +75,7 @@ describe("OpenAI streaming normalization (real adapter, SDK layer mocked — no 
   });
 
   it("a provider error becomes a normalized STREAM_ERROR and terminates — no STREAM_COMPLETED follows", async () => {
-    vi.spyOn(OpenAI.Chat.Completions.prototype, "create").mockRejectedValue(new OpenAI.RateLimitError(429, undefined, "rate limited", {}));
+    vi.spyOn(OpenAI.Chat.Completions.prototype, "create").mockRejectedValue(new OpenAI.RateLimitError(429, undefined, "rate limited", new Headers()));
     const events = await collect(openAIProvider.generateStream!(streamRequest));
     expect(events[0]).toMatchObject({ type: "STREAM_STARTED" });
     const last = events[events.length - 1]!;

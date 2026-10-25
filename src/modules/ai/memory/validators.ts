@@ -67,7 +67,18 @@ const metadataValue = z.union([
   z.number().finite(),
   z.boolean(),
 ]);
-const metadataField = z
+/**
+ * zod 4 silently DROPS an own "__proto__" key while parsing a record instead of rejecting it, so a post-parse refinement can never
+ * see it. Reject it explicitly on the RAW input first (zod 3 rejected it through the key regex). Only the raw own-property check
+ * can detect a JSON.parse'd `{"__proto__": ...}` payload.
+ */
+const rejectProtoKey = z.unknown().superRefine((raw, ctx) => {
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw) && Object.getOwnPropertyNames(raw).includes("__proto__")) {
+    ctx.addIssue({ code: "custom", message: "This key name is not allowed" });
+  }
+});
+
+const metadataRecord = z
   .record(
     z.string().min(1).max(MEMORY_LIMITS.metadataKeyMaxLength).regex(/^[A-Za-z][A-Za-z0-9_.-]*$/, "Keys must start with a letter and use letters, digits, _ . -")
       .refine((k) => !SECRET_KEY_NAME.test(k), "This key name is not allowed"),
@@ -75,6 +86,7 @@ const metadataField = z
   )
   .refine((m) => Object.keys(m).length <= MEMORY_LIMITS.metadataMaxKeys, `At most ${MEMORY_LIMITS.metadataMaxKeys} metadata keys`)
   .refine((m) => JSON.stringify(m).length <= MEMORY_LIMITS.metadataMaxSerializedLength, `Metadata must be at most ${MEMORY_LIMITS.metadataMaxSerializedLength} characters when serialized`);
+const metadataField = rejectProtoKey.pipe(metadataRecord);
 
 /** ISO-8601 with offset/Z. Must be in the future when set. */
 const expiresAtField = z
