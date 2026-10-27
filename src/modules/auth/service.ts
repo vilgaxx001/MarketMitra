@@ -26,6 +26,19 @@ import type { AuthUser, SessionPayload } from "@/modules/auth/types";
 const BCRYPT_ROUNDS = 12;
 const TOKEN_EXPIRY_HOURS = { emailVerification: 24, passwordReset: 1 };
 
+/**
+ * Hash compared against when the e-mail is unknown, so the "no such user" path spends the same bcrypt
+ * work (same cost factor) as the "wrong password" path. It MUST be a well-formed bcrypt hash: bcryptjs
+ * rejects a malformed one in microseconds, which turned the unknown-user path into a ~10^4x faster
+ * response and made registered e-mails enumerable by timing. Generated once per process from random
+ * bytes (nothing to leak, no password it can match) and memoised.
+ */
+let dummyPasswordHash: Promise<string> | undefined;
+export function getDummyPasswordHash(): Promise<string> {
+  dummyPasswordHash ??= bcrypt.hash(nanoid(48), BCRYPT_ROUNDS);
+  return dummyPasswordHash;
+}
+
 /* -------------------------------------------------------------------------
  * Token helpers — never stored raw, always hashed before DB write.
  * ---------------------------------------------------------------------- */
@@ -97,7 +110,7 @@ export async function login(
 
   // Use a constant-time comparison even on "user not found" to prevent
   // timing attacks that could enumerate registered emails.
-  const passwordHash = user?.passwordHash ?? "$2b$12$invalidhashforunknownusers";
+  const passwordHash = user?.passwordHash ?? (await getDummyPasswordHash());
   const valid = await bcrypt.compare(input.password, passwordHash);
 
   if (!user || !valid) {
