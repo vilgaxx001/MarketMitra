@@ -32,7 +32,7 @@ describe("login unknown-user path", () => {
     await getDummyPasswordHash(); // exclude one-time generation from the measurement
     const spy = vi.spyOn(bcrypt, "compare");
     const t0 = performance.now();
-    await expect(login({ email: "nobody@example.test", password: "Whatever-123" })).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+    await expect(login({ email: "nobody@example.test", password: "Whatever-123", rememberMe: false })).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
     const ms = performance.now() - t0;
     expect(spy).toHaveBeenCalledTimes(1);
     expect(String(spy.mock.calls[0]![1])).toHaveLength(60);
@@ -44,9 +44,9 @@ describe("login unknown-user path", () => {
   it("known user + wrong password and unknown user return the same error", async () => {
     const hash = await bcrypt.hash("Correct-Horse-1", 12);
     repo.findUserByEmail.mockResolvedValueOnce({ id: "u1", email: "a@example.test", passwordHash: hash, isActive: true });
-    const known = await login({ email: "a@example.test", password: "wrong-password-1" }).catch((e) => e);
+    const known = await login({ email: "a@example.test", password: "wrong-password-1", rememberMe: false }).catch((e) => e);
     repo.findUserByEmail.mockResolvedValueOnce(null);
-    const unknown = await login({ email: "b@example.test", password: "wrong-password-1" }).catch((e) => e);
+    const unknown = await login({ email: "b@example.test", password: "wrong-password-1", rememberMe: false }).catch((e) => e);
     expect(known.code).toBe(unknown.code);
     expect(known.message).toBe(unknown.message);
   }, 30_000);
