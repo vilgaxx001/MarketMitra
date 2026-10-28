@@ -22,6 +22,7 @@
  */
 
 import { z } from "zod";
+import { parsePolicy } from "@/lib/rate-limit/policy";
 
 /* -------------------------------------------------------------------------
  * Schema
@@ -99,6 +100,29 @@ const envSchema = z.object({
 
   /* ---------- Rate limiting / caching ---------- */
   REDIS_URL: z.string().optional(),
+  /**
+   * Which client-IP information the rate limiter may trust (src/lib/rate-limit/client-ip.ts). Default: none - x-forwarded-for
+   * is ignored and every client shares one flood-ceiling bucket. Set exactly the one that matches the deployment:
+   *   TRUSTED_IP_HEADER   name of a header the edge overwrites with the client IP (e.g. cf-connecting-ip, x-real-ip), or
+   *   TRUSTED_PROXY_HOPS  number of reverse proxies that append to x-forwarded-for.
+   * Setting either when the app is directly reachable by clients lets them choose their own rate-limit identity.
+   */
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+  TRUSTED_IP_HEADER: z
+    .string()
+    .transform((v) => v.trim().toLowerCase() || undefined)
+    .pipe(z.string().regex(/^[a-z0-9-]{1,64}$/, "must be a plain header name such as cf-connecting-ip").optional())
+    .optional(),
+  /** Optional JSON override of the rate-limit thresholds (strict, validated; see src/lib/rate-limit/policy.ts and docs/RATE_LIMITING.md). */
+  RATE_LIMIT_POLICY_JSON: z
+    .string()
+    .optional()
+    .superRefine((v, ctx) => {
+      const r = parsePolicy(v);
+      if (!r.ok) ctx.addIssue({ code: "custom", message: r.error });
+    }),
+  /** What the limiter does when Redis is unavailable: keep enforcing in-process ("memory", default) or refuse with 503 ("deny"). Never "allow". */
+  RATE_LIMIT_ON_STORE_FAILURE: z.enum(["memory", "deny"]).default("memory"),
 
   /* ---------- Monitoring / Logging ---------- */
   SENTRY_DSN: z.string().optional(),
@@ -172,6 +196,18 @@ function validateConditionalRequirements(parsed: Env, rawEnv: NodeJS.ProcessEnv)
       // eslint-disable-next-line no-console
       console.warn(
         "[env] WARNING: Running in production with no Razorpay or Stripe keys configured. Billing endpoints will reject all checkout attempts until configured."
+      );
+    }
+    if (!parsed.TRUSTED_IP_HEADER && parsed.TRUSTED_PROXY_HOPS === 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[env] WARNING: neither TRUSTED_IP_HEADER nor TRUSTED_PROXY_HOPS is set in production. Rate limits cannot tell clients apart: all requests to an endpoint share one flood-ceiling bucket and login lockouts apply per account across all clients. See docs/RATE_LIMITING.md."
+      );
+    }
+    if (!rawEnv.REDIS_URL) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[env] WARNING: REDIS_URL not set in production. Rate limits fall back to per-instance memory (weaker with more than one instance, and reset on restart)."
       );
     }
     if (!rawEnv.SENTRY_DSN) {
