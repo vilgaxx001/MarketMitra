@@ -50,4 +50,22 @@ describe("login unknown-user path", () => {
     expect(known.code).toBe(unknown.code);
     expect(known.message).toBe(unknown.message);
   }, 30_000);
+
+  it("generates the dummy hash once, before the first lookup of EITHER kind (no first-unknown-user marker)", async () => {
+    vi.resetModules();
+    const hashSpy = vi.spyOn(bcrypt, "hash");
+    const fresh = await import("@/modules/auth/service");
+    const real = await bcrypt.hash("Correct-Horse-1", 12);
+    hashSpy.mockClear();
+    // bcryptjs.hash(pw, rounds) calls hash(pw, salt) internally, so count only the calls that carry a cost factor
+    const generations = () => hashSpy.mock.calls.filter((c) => typeof c[1] === "number").length;
+    repo.findUserByEmail.mockResolvedValueOnce({ id: "u1", email: "a@example.test", passwordHash: real, isActive: true, emailVerifiedAt: null, name: "A", platformRole: "USER" });
+    // a KNOWN user's first login in a fresh module instance triggers the one-time generation too
+    await fresh.login({ email: "a@example.test", password: "wrong-password-1", rememberMe: false }).catch(() => undefined);
+    expect(generations()).toBe(1);
+    repo.findUserByEmail.mockResolvedValueOnce(null);
+    await fresh.login({ email: "b@example.test", password: "wrong-password-1", rememberMe: false }).catch(() => undefined);
+    expect(generations()).toBe(1); // memoised: no second generation
+    hashSpy.mockRestore();
+  }, 30_000);
 });

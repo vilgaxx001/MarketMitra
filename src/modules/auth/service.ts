@@ -106,11 +106,13 @@ export async function login(
   input: LoginInput,
   meta: { userAgent?: string; ipAddress?: string } = {}
 ): Promise<{ user: AuthUser; sessionToken: string }> {
-  const user = await repo.findUserByEmail(input.email);
+  // The dummy hash is awaited on EVERY login (a no-op after the first), not only for unknown e-mails, so the one-time
+  // cost of generating it lands on the first request of either kind rather than marking the first unknown-user request.
+  const [user, dummyHash] = await Promise.all([repo.findUserByEmail(input.email), getDummyPasswordHash()]);
 
   // Use a constant-time comparison even on "user not found" to prevent
   // timing attacks that could enumerate registered emails.
-  const passwordHash = user?.passwordHash ?? (await getDummyPasswordHash());
+  const passwordHash = user?.passwordHash ?? dummyHash;
   const valid = await bcrypt.compare(input.password, passwordHash);
 
   if (!user || !valid) {
