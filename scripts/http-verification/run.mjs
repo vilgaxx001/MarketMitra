@@ -42,11 +42,17 @@ function check(name, ok, detail = "") {
 }
 const section = (t) => console.log(`\n== ${t}`);
 
+// The app under test runs with TRUSTED_IP_HEADER=x-real-ip (scripts/ci/write-env.sh), i.e. this script plays the trusted edge.
+// Every Client gets its OWN address, so the rate limits (src/lib/rate-limit) see each simulated user separately and the older
+// sections never share a counter. Sections that test the limits override it per request.
+let clientSeq = 0;
+// Run-derived second octet: a re-run against the SAME Redis (limit windows last up to an hour) does not meet the previous run's counters.
+const runOctet = 16 + (parseInt(Date.now().toString(36), 36) & 15);
 class Client {
-  constructor(label) { this.label = label; this.cookies = new Map(); }
+  constructor(label) { this.label = label; this.cookies = new Map(); const n = ++clientSeq; this.ip = `172.${runOctet}.${(n >> 8) & 255}.${n & 255}`; }
   header() { return [...this.cookies].map(([k, v]) => `${k}=${v}`).join("; "); }
   async call(method, p, body, { raw, headers, redirect } = {}) {
-    const h = { Origin: BASE, ...(headers ?? {}) };
+    const h = { Origin: BASE, "x-real-ip": this.ip, ...(headers ?? {}) };
     if (this.cookies.size) h.Cookie = this.header();
     let payload;
     if (raw !== undefined) payload = raw;
@@ -395,6 +401,112 @@ try {
     check("exactly 20 calls pass the limiter per window, the rest -> 429 RATE_LIMITED", passed === 20 && limited === 4, JSON.stringify(statuses));
     r = await exec(A.c); check("429 body is the standard envelope", r.status === 429 && code(r) === "RATE_LIMITED", `${r.status} ${r.text}`);
     r = await exec(B.c, WB.slug); check("another workspace is not limited by Alpha's window", r.status === 502, `${r.status} ${r.text.slice(0, 120)}`);
+  }
+
+  section("Public-endpoint rate limits, body bounds and forgot-password deferral (real server, real Redis, real PostgreSQL)");
+  {
+    // Addresses derive from the run id so a re-run against the SAME Redis (windows last up to an hour) never meets stale counters.
+    const net = parseInt(run, 36) % 65_000;
+    const ipN = (n) => `10.${(net >> 8) & 255}.${net & 255}.${n}`;
+    const at = (ip, extra = {}) => ({ headers: { "x-real-ip": ip, ...extra } });
+    const LOGIN = "/api/v1/auth/login";
+    const fresh = () => new Client("rl");
+    const hasSession = (res) => (res.headers.getSetCookie?.() ?? []).some((c) => c.startsWith(`${COOKIE_NAME}=`));
+
+    // --- per-IP limit: decided before validation, immune to a forged x-forwarded-for
+    const st = [];
+    for (let i = 0; i < 31; i++) st.push((await fresh().call("POST", LOGIN, {}, at(ipN(11), { "x-forwarded-for": `9.9.9.${i}` }))).status);
+    check("login per-IP limit: requests 1-30 pass the limiter ({} -> 400), the 31st -> 429, although each request forged a different x-forwarded-for", st.slice(0, 30).every((x) => x === 400) && st[30] === 429, st.join(","));
+    r = await fresh().call("POST", LOGIN, {}, at(ipN(11)));
+    const retry = Number(r.headers.get("retry-after"));
+    check("429 contract: RATE_LIMITED envelope, integer Retry-After within the 15-minute window, Cache-Control no-store, nothing about accounts", r.status === 429 && code(r) === "RATE_LIMITED" && Number.isInteger(retry) && retry >= 1 && retry <= 900 && /no-store/.test(r.headers.get("cache-control") ?? "") && !/account|password|e-?mail/i.test(r.json?.error?.message ?? ""), `${r.status} retry-after=${r.headers.get("retry-after")} ${r.text}`);
+    r = await fresh().call("POST", LOGIN, {}, at(ipN(12)));
+    check("a different client address is unaffected by that block", r.status === 400, r.status);
+
+    // --- per account + IP: brute-force control that cannot be turned into a lockout of the owner
+    const V = await signup("rl-victim");
+    check("victim account created for the lockout checks", V.r.status === 201, `${V.r.status} ${V.r.text}`);
+    const bad = (em, ip) => fresh().call("POST", LOGIN, { email: em, password: "Wrong1234Pass" }, at(ip));
+    const good = (ip, extra) => fresh().call("POST", LOGIN, { email: email("rl-victim"), password: PASSWORD }, at(ip, extra));
+    let seq = []; for (let i = 0; i < 6; i++) seq.push((await bad(email("rl-victim"), ipN(21))).status);
+    check("login per account+IP: 5 wrong passwords -> 401, the 6th -> 429", seq.join() === "401,401,401,401,401,429", seq.join());
+    r = await good(ipN(21));
+    check("while blocked, even the CORRECT password from that address is refused with 429 and no session", r.status === 429 && !hasSession(r), `${r.status} ${r.text}`);
+    r = await good(ipN(22));
+    check("the real owner on ANOTHER address is not locked out by that attacker (200 + session cookie)", r.status === 200 && hasSession(r), `${r.status} ${r.text}`);
+    seq = []; for (let i = 0; i < 6; i++) seq.push((await bad(email("rl-nobody"), ipN(23))).status);
+    check("a NON-EXISTENT account is throttled identically (5 x 401, then 429)", seq.join() === "401,401,401,401,401,429", seq.join());
+    const realBlocked = await bad(email("rl-victim"), ipN(21)); const ghostBlocked = await bad(email("rl-nobody"), ipN(23));
+    check("the 429 for an existing and a non-existent account is byte-identical (no enumeration through the limiter)", realBlocked.status === 429 && ghostBlocked.status === 429 && realBlocked.text === ghostBlocked.text, `${realBlocked.text} | ${ghostBlocked.text}`);
+    const par = await Promise.all(Array.from({ length: 40 }, () => bad(email("rl-victim"), ipN(24))));
+    const n401 = par.filter((x) => x.status === 401).length, n429 = par.filter((x) => x.status === 429).length;
+    check("40 PARALLEL wrong-password logins (same account, same address): exactly 5 reach the password check", n401 === 5 && n429 === 35, `401=${n401} 429=${n429} other=${par.filter((x) => x.status !== 401 && x.status !== 429).map((x) => x.status).join(",")}`);
+    r = await good(ipN(25), { "x-forwarded-for": "6.6.6.6" });
+    const sessRow = await sql.query(`select s."ipAddress" as ip from sessions s join users u on u.id = s."userId" where u.email = $1 order by s."createdAt" desc limit 1`, [email("rl-victim")]);
+    check("the session records the trusted address (x-real-ip), never the client's own x-forwarded-for", r.status === 200 && sessRow.rows[0]?.ip === ipN(25), `${r.status} stored=${sessRow.rows[0]?.ip}`);
+
+    // --- every other public endpoint, per IP (counted before validation)
+    for (const [pth, n, max] of [["/api/v1/auth/signup", 53, 5], ["/api/v1/auth/forgot-password", 54, 5], ["/api/v1/auth/reset-password", 55, 10], ["/api/v1/auth/verify-email", 56, 10], ["/api/v1/contact", 57, 5], ["/api/v1/ai/demo-generate", 58, 20]]) {
+      const got = []; for (let i = 0; i <= max; i++) got.push((await fresh().call("POST", pth, {}, at(ipN(n)))).status);
+      check(`${pth}: ${max} requests per IP per window reach validation (400), request ${max + 1} -> 429`, got.slice(0, max).every((x) => x === 400) && got[max] === 429, got.join(","));
+    }
+
+    // --- Redis hygiene
+    if (redis) {
+      const keys = await redis.keys("rl:v1:*");
+      const ttls = await Promise.all(keys.map((k) => redis.pttl(k)));
+      check("Redis: rate-limit keys exist and every one has a bounded expiry (none stranded without a TTL)", keys.length > 0 && ttls.every((t) => t > 0 && t <= 30 * 86_400_000), `keys=${keys.length} badTtl=${ttls.filter((t) => !(t > 0 && t <= 30 * 86_400_000)).length}`);
+      check("Redis: no rate-limit key contains an e-mail address", !keys.some((k) => /@|http-verify|example\.test/i.test(k)), keys.filter((k) => /@|http-verify|example\.test/i.test(k)).slice(0, 2).join(","));
+    }
+
+    // --- request bodies on the real server
+    const J = { "Content-Type": "application/json" };
+    const pad = (bytes) => { const base = JSON.stringify({ email: "a@example.test", password: "" }); return JSON.stringify({ email: "a@example.test", password: "p".repeat(bytes - Buffer.byteLength(base)) }); };
+    check("test helper builds an exactly 8192-byte body", Buffer.byteLength(pad(8192)) === 8192, Buffer.byteLength(pad(8192)));
+    r = await fresh().call("POST", LOGIN, undefined, { raw: pad(8192), headers: { ...J, "x-real-ip": ipN(31) } });
+    check("login: a body of EXACTLY the 8 KiB limit is accepted by the reader (reaches the credential check: 401)", r.status === 401, `${r.status} ${r.text.slice(0, 120)}`);
+    r = await fresh().call("POST", LOGIN, undefined, { raw: pad(8193), headers: { ...J, "x-real-ip": ipN(31) } });
+    check("login: ONE byte over the limit -> 400 'too large'", r.status === 400 && /too large/i.test(r.text), `${r.status} ${r.text.slice(0, 120)}`);
+    const chunks = new TextEncoder().encode(pad(20_000));
+    const chunked = new ReadableStream({ start(c) { for (let i = 0; i < chunks.length; i += 1024) c.enqueue(chunks.slice(i, i + 1024)); c.close(); } });
+    r = await fresh().call("POST", LOGIN, undefined, { raw: chunked, headers: { ...J, "x-real-ip": ipN(31) } });
+    check("login: an oversized CHUNKED body with no Content-Length -> 400 'too large'", r.status === 400 && /too large/i.test(r.text), `${r.status} ${r.text.slice(0, 120)}`);
+    r = await fresh().call("POST", LOGIN, undefined, { raw: "x".repeat(6_000_000), headers: { ...J, "x-real-ip": ipN(31) } });
+    check("login: a 6 MB body (above the 4 MiB framework buffer) -> 400 'too large', not a crash or a truncated-JSON error", r.status === 400 && /too large/i.test(r.text), `${r.status} ${r.text.slice(0, 120)}`);
+    r = await fresh().call("POST", LOGIN, undefined, { raw: pad(100), headers: { "Content-Type": "text/plain", "x-real-ip": ipN(31) } });
+    check("login: Content-Type text/plain -> 415 UNSUPPORTED_MEDIA_TYPE", r.status === 415 && code(r) === "UNSUPPORTED_MEDIA_TYPE", `${r.status} ${r.text}`);
+    const noType = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(pad(100))); c.close(); } });
+    r = await fresh().call("POST", LOGIN, undefined, { raw: noType, headers: { "x-real-ip": ipN(31) } });
+    check("login: no Content-Type at all -> 415", r.status === 415 && code(r) === "UNSUPPORTED_MEDIA_TYPE", `${r.status} ${r.text}`);
+    r = await fresh().call("POST", LOGIN, undefined, { raw: pad(100), headers: { ...J, "Content-Encoding": "gzip", "x-real-ip": ipN(31) } });
+    check("login: Content-Encoding gzip -> 415 (compressed bodies are never expanded)", r.status === 415, `${r.status} ${r.text}`);
+    const bigControl = JSON.stringify({ name: "x".repeat(20_000) });
+    r = await V.c.call("POST", "/api/v1/workspaces", undefined, { raw: bigControl, headers: J });
+    check("authenticated POST /workspaces: a 20 KB body (control limit 16 KiB) -> 400 'too large'", r.status === 400 && /too large/i.test(r.text), `${r.status} ${r.text.slice(0, 120)}`);
+    r = await fresh().call("POST", "/api/v1/workspaces", undefined, { raw: bigControl, headers: J });
+    check("the same oversized body WITHOUT a session -> 401: authentication is still decided before the body is read", r.status === 401, `${r.status} ${r.text.slice(0, 120)}`);
+    r = await anon.call("GET", "/api/v1/auth/me"); check("server still healthy after the oversized and malformed bodies", r.status === 401, r.status);
+
+    // --- forgot-password: no existence oracle, and the deferred work really runs in the production server
+    const fp = (em, ip) => fresh().call("POST", "/api/v1/auth/forgot-password", { email: em }, at(ip));
+    // Issuing a token deletes the user's other unused ones, so the row COUNT stays 1; the hash of the live row is what changes.
+    const tokenHash = async () => (await sql.query(`select t."tokenHash" as h from password_reset_tokens t join users u on u.id = t."userId" where u.email = $1 order by t."createdAt" desc limit 1`, [email("rl-victim")])).rows[0]?.h ?? null;
+    const waitFor = async (pred, ms = 15_000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await pred()) return true; await new Promise((res) => setTimeout(res, 250)); } return false; };
+    const h0 = await tokenHash();
+    const fe = await fp(email("rl-victim"), ipN(41)); const fu = await fp(email("rl-ghost"), ipN(42));
+    check("forgot-password: an existing and an unknown address get the same 200 and body (the e-mail provider is unusable here, which used to make the existing case fail)", fe.status === 200 && fu.status === 200 && fe.text === fu.text, `${fe.status} ${fe.text} | ${fu.status} ${fu.text}`);
+    check("forgot-password: the deferred work ran in the production server (a reset token appeared after the response)", await waitFor(async () => (await tokenHash()) !== h0), `hash before=${h0 === null ? "none" : "set"}`);
+    // per-address limit is 3 per hour: request 1 (above) + 2 more issue tokens, the 4th and 5th must send nothing
+    let prev = await tokenHash(); const issued = []; const same = [];
+    for (let i = 0; i < 4; i++) {
+      const x = await fp(email("rl-victim"), ipN(43 + i));
+      same.push(x.status === 200 && x.text === fe.text);
+      if (i < 2) { issued.push(await waitFor(async () => (await tokenHash()) !== prev)); prev = await tokenHash(); }
+    }
+    check("forgot-password: requests beyond the per-address limit get the SAME 200 and body as the allowed ones", same.every(Boolean), same.join());
+    check("forgot-password: requests 2 and 3 for the address issued new tokens", issued.every(Boolean), issued.join());
+    await new Promise((res) => setTimeout(res, 3_000));
+    check("forgot-password: requests 4 and 5 (over the per-address limit) issued NOTHING", (await tokenHash()) === prev, "token changed after the limit was exceeded");
   }
 } catch (e) {
   check("script completed without an unexpected exception", false, e?.stack ?? e);

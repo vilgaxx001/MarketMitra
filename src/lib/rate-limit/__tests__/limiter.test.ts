@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { RateLimiter, normalizeIdentifier } from "@/lib/rate-limit/limiter";
 import { DEFAULT_POLICY } from "@/lib/rate-limit/policy";
 import { MemoryStore, ResilientStore, type CounterStore } from "@/lib/rate-limit/store";
