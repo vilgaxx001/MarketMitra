@@ -1,7 +1,7 @@
 # Rate limiting and request-body limits
 
 Code: `src/lib/rate-limit/` (policy, client-ip, store, limiter, index) and `src/lib/bounded-json.ts`.
-Tests: `src/lib/rate-limit/__tests__/` (82 unit + 13 real-Redis + 26 route-level), `src/lib/__tests__/bounded-json.test.ts`,
+Tests: `src/lib/rate-limit/__tests__/` (unit tests, tests against a real Redis, and route-level tests of the real handlers), `src/lib/__tests__/bounded-json.test.ts`,
 `src/lib/__tests__/route-body-guard.test.ts`, and the HTTP suite section "Public-endpoint rate limits, body bounds and
 forgot-password deferral" (`scripts/http-verification/run.mjs`).
 
