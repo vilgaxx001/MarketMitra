@@ -170,14 +170,29 @@ describe("login: brute-force control without permanent lockout", () => {
   });
   it("many different addresses cannot be used to flood one address's counter into another's", async () => {
     const { limiter } = setup();
-    for (let i = 0; i < P.ip.max; i++) await limiter.beginLogin(ipOf("198.51.100.5"), `x${i}@example.test`).catch(() => undefined);
-    expect(await reason(limiter.beginLogin(ipOf("198.51.100.5"), "fresh@example.test"))).toBeInstanceOf(RateLimitedException); // per-IP flood limit
-    await expect(limiter.beginLogin(ipOf("198.51.100.6"), "fresh@example.test")).resolves.toBeDefined();
+    // the route runs enforceIp("login") first, then beginLogin; model that
+    const attempt = async (ip: ClientIp, email: string) => { await limiter.enforceIp("login", ip); return limiter.beginLogin(ip, email); };
+    for (let i = 0; i < P.ip.max; i++) await attempt(ipOf("198.51.100.5"), `x${i}@example.test`);
+    expect(await reason(attempt(ipOf("198.51.100.5"), "fresh@example.test"))).toBeInstanceOf(RateLimitedException); // per-IP flood limit
+    await expect(attempt(ipOf("198.51.100.6"), "fresh@example.test")).resolves.toBeDefined();
   });
   it("an unidentifiable client is never 'recognised': one success must not exempt every other unknown client", async () => {
     const { limiter, store } = setup();
     await (await limiter.beginLogin(UNKNOWN, "a@example.test")).succeeded();
     expect(store.keys().some((k) => k.includes(":known:"))).toBe(false);
+  });
+});
+
+describe("each login attempt is counted ONCE per counter (regression: the IP counter was incremented twice)", () => {
+  it("the per-IP counter advances by exactly one per attempt when the route's enforceIp and beginLogin are both called", async () => {
+    const { limiter } = setup();
+    const ip = ipOf("198.51.100.15");
+    const P = DEFAULT_POLICY.login;
+    for (let i = 0; i < P.ip.max; i++) {
+      await limiter.enforceIp("login", ip);
+      await limiter.beginLogin(ip, `user${i}@example.test`); // distinct accounts: only the IP counter can trip
+    }
+    expect(await reason(limiter.enforceIp("login", ip))).toBeInstanceOf(RateLimitedException); // the (max+1)th, not the (max/2+1)th
   });
 });
 

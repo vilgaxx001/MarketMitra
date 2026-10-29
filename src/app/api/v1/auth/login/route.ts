@@ -5,18 +5,26 @@ import { withApiHandler, apiSuccess, apiValidationError } from "@/lib/api-respon
 import { loginSchema } from "@/modules/auth/validators";
 import * as authService from "@/modules/auth/service";
 import { setSessionCookie } from "@/modules/auth/session";
-import { headers } from "next/headers";
+import { readBoundedJson, BODY_LIMITS } from "@/lib/bounded-json";
+import { enforceIpLimit, beginLoginAttempt } from "@/lib/rate-limit";
 
 export const POST = withApiHandler(async (req) => {
-  const body = await req.json();
-  const result = loginSchema.safeParse(body);
+  // Per-IP limit first, before a byte of the body is read: a flood costs one counter increment, not a parse.
+  const ip = await enforceIpLimit(req, "login");
+  const parsedBody = await readBoundedJson(req, BODY_LIMITS.auth);
+  if (!parsedBody.ok) return parsedBody.response;
+  const result = loginSchema.safeParse(parsedBody.data);
   if (!result.success) return apiValidationError(result.error);
 
-  const headersList = await headers();
+  // Counts this attempt per account+IP and per account (unrecognised IPs) BEFORE the password is checked, so parallel guesses
+  // cannot slip through; refuses with the same 429 whether or not the account exists.
+  const attempt = await beginLoginAttempt(ip, result.data.email);
   const { user, sessionToken } = await authService.login(result.data, {
-    userAgent: headersList.get("user-agent") ?? undefined,
-    ipAddress: headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
+    userAgent: req.headers.get("user-agent") ?? undefined,
+    // Only an address the deployment's trusted-proxy configuration vouches for; never the client's own x-forwarded-for.
+    ipAddress: ip.address ?? undefined,
   });
+  await attempt.succeeded();
 
   await setSessionCookie(sessionToken);
 

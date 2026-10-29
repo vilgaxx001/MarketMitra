@@ -9,10 +9,13 @@
  * HMAC-SHA-256 under a server secret, truncated to 128 bits. A Redis dump therefore does not list the e-mails that were
  * tried, and the keys cannot be recomputed offline without the secret. Client IPs are keyed as their bucket (see client-ip.ts).
  *
- * LOGIN (beginLogin). Three counters, each created with an atomic expiry that is never extended:
- *   1. per client IP, every attempt (flood control; checked first and, when tripped, nothing else is touched);
+ * LOGIN. Three counters, each created with an atomic expiry that is never extended:
+ *   1. per client IP, every attempt (flood control). Enforced by the ROUTE through enforceIp("login") BEFORE the body is read,
+ *      so a flood costs one increment and no parsing. beginLogin deliberately does not repeat it: counting it twice per attempt
+ *      halved the configured limit (found by the route-level tests);
  *   2. per account + IP, every attempt, cleared by a successful login (the brute-force control: 5 guesses / 15 min / pair);
  *   3. per account across all IPs NOT recently seen succeeding for that account (distributed guessing).
+ *   beginLogin counts 2 and 3.
  * Counters count attempts BEFORE the password is checked (INCR is atomic), so parallel requests cannot all slip through a
  * "check then record the failure" gap: with a limit of N, exactly N are admitted.
  *
@@ -103,7 +106,10 @@ export class RateLimiter {
     await this.hitOrThrow(`rl:v1:${endpoint}:email:${this.keyed(endpoint, normalizeIdentifier(email))}`, limit, endpoint, "identifier");
   }
 
-  /** Counts one login attempt and throws RateLimitedException if any of the three login counters is exhausted. */
+  /**
+   * Counts one login attempt against the per-account counters (2 and 3 above) and throws RateLimitedException if either is
+   * exhausted. The caller must already have passed enforceIp("login", ip).
+   */
   async beginLogin(ip: ClientIp, email: string): Promise<LoginAttempt> {
     const { login } = this.d.policy;
     const account = normalizeIdentifier(email);
@@ -115,7 +121,6 @@ export class RateLimiter {
     // An address we cannot identify is never "recognised": one success from the shared unknown bucket must not exempt everyone.
     const identifiable = ip.address !== null;
 
-    await this.enforceIp("login", ip);
     await this.hitOrThrow(pairKey, login.accountIp, "login", "account-ip");
     const known = identifiable && (await this.d.store.hasFlag(knownKey));
     if (!known) await this.hitOrThrow(acctKey, login.accountUnrecognizedIp, "login", "account");

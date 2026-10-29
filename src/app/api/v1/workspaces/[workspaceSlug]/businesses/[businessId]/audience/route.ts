@@ -6,6 +6,7 @@ import { requireWorkspaceAccess } from "@/lib/middleware/require-auth";
 import { requirePermission } from "@/modules/rbac";
 import { audienceSegmentSchema } from "@/modules/audience/validators";
 import { listSegments, createSegment } from "@/modules/audience/service";
+import { readBoundedJson, BODY_LIMITS } from "@/lib/bounded-json";
 
 export const GET = withApiHandler<{ workspaceSlug: string; businessId: string }>(async (req, { params }) => {
   const { workspaceSlug, businessId } = await params;
@@ -22,7 +23,9 @@ export const POST = withApiHandler<{ workspaceSlug: string; businessId: string }
   const workspaceUser = await requireWorkspaceAccess(workspaceSlug);
   await requirePermission(workspaceUser, "audience:create");
 
-  const body = await req.json();
+  const parsedBody = await readBoundedJson(req, BODY_LIMITS.profile);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body = parsedBody.data;
   const result = audienceSegmentSchema.safeParse(body);
   if (!result.success) return apiValidationError(result.error);
 

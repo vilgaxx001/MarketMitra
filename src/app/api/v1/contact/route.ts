@@ -17,6 +17,8 @@ import { withApiHandler, apiSuccess, apiValidationError } from "@/lib/api-respon
 import { env } from "@/lib/env";
 import { sendEmail } from "@/lib/email";
 import { logger } from "@/lib/logger";
+import { readBoundedJson, BODY_LIMITS } from "@/lib/bounded-json";
+import { enforceIpLimit, enforceEmailLimit } from "@/lib/rate-limit";
 
 const CONTACT_TOPICS = ["general", "billing", "bug-report", "agency-plan", "press"] as const;
 
@@ -28,11 +30,14 @@ const contactSchema = z.object({
 });
 
 export const POST = withApiHandler(async (req) => {
-  const body = await req.json();
-  const result = contactSchema.safeParse(body);
+  await enforceIpLimit(req, "contact");
+  const parsedBody = await readBoundedJson(req, BODY_LIMITS.publicForm);
+  if (!parsedBody.ok) return parsedBody.response;
+  const result = contactSchema.safeParse(parsedBody.data);
   if (!result.success) return apiValidationError(result.error);
 
   const { name, email, topic, message } = result.data;
+  await enforceEmailLimit("contact", email);
 
   logger.info({
     msg: "contact_form_submission",
