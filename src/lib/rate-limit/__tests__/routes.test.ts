@@ -41,6 +41,11 @@ async function load(env: Record<string, string> = {}) {
   vi.stubEnv("TRUSTED_IP_HEADER", "x-test-ip");
   vi.stubEnv("RATE_LIMIT_POLICY_JSON", JSON.stringify(POLICY));
   vi.stubEnv("TRUSTED_PROXY_HOPS", "0");
+  // Hermetic: these tests must not depend on the ambient environment. CI exports REDIS_URL for the whole job (the real-Redis
+  // suites need it), which would otherwise route these in-process doubles to a live Redis shared with other test files.
+  // The Redis-outage tests below pass their own REDIS_URL / RATE_LIMIT_ON_STORE_FAILURE.
+  vi.stubEnv("REDIS_URL", "");
+  vi.stubEnv("RATE_LIMIT_ON_STORE_FAILURE", "memory");
   for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
   routes.login = (await import("@/app/api/v1/auth/login/route")).POST as Handler;
   routes.signup = (await import("@/app/api/v1/auth/signup/route")).POST as Handler;
@@ -182,7 +187,9 @@ describe("forgot-password: same answer for every address, and no oracle in timin
     await expect(Promise.all(m.afterQueue.map((f) => f()))).resolves.toBeDefined();
     expect(m.requestPasswordReset).toHaveBeenCalledTimes(1);
     expect(m.requestPasswordReset).toHaveBeenCalledWith("secret.person@example.test");
-    expect(m.error).toHaveBeenCalledTimes(1);
+    const failures = m.error.mock.calls.filter((c) => c[0]?.msg === "password_reset_request_failed");
+    expect(failures).toHaveLength(1);
+    expect(m.error).toHaveBeenCalledTimes(1); // nothing else logged an error either (e.g. no store degradation)
     expect(JSON.stringify(m.error.mock.calls)).not.toMatch(/secret|person|example\.test|550/);
   });
   it("over the per-address limit: the SAME 200 and body, nothing is queued (no 429 that would reveal prior requests)", async () => {
