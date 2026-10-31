@@ -59,43 +59,66 @@ function tokenExpiresAt(hours: number): Date {
  * Signup
  * ---------------------------------------------------------------------- */
 
-export async function signup(input: SignupInput): Promise<{ user: AuthUser; sessionToken: string }> {
+/**
+ * The only synchronous signup decision, and it is the same for every caller: the platform-wide switch.
+ * Everything that depends on whether the address is already registered happens in registerAccount(), after the response.
+ */
+export function assertSignupsEnabled(): void {
   if (!env.ENABLE_SIGNUPS) {
     throw new ApiException("FORBIDDEN", "New signups are currently disabled.");
   }
+}
 
-  // Check email not already taken
+/**
+ * ACCOUNT-ENUMERATION-SAFE SIGNUP. The route answers every valid request identically (HTTP 202, same body, NO session cookie)
+ * and calls this AFTER sending the response, so nothing about the answer, its headers or its timing depends on whether the
+ * address is registered. What differs happens out of band, in the owner's inbox only:
+ *   - new address      -> the account is created and a verification e-mail is sent;
+ *   - existing address -> NO second account and no change to the existing one; the owner receives a "you already have an
+ *                         account" e-mail with log-in and password-reset links (a stranger who typed their address learns
+ *                         nothing, and the owner is warned that somebody tried).
+ * The password hash is computed on both paths so the deferred work has the same shape. A concurrent duplicate that loses the
+ * unique-index race is treated as the existing-address case. Failures are logged by error NAME only (provider errors can echo
+ * the recipient address) and never surfaced to the caller: the caller already has their answer, and a retry is always safe.
+ */
+export async function registerAccount(input: SignupInput): Promise<void> {
+  const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
   const existing = await repo.findUserByEmail(input.email);
   if (existing) {
-    throw new ApiException(
-      "CONFLICT",
-      "An account with this email already exists. Try logging in instead."
-    );
+    await notifyExistingAccount(existing);
+    return;
   }
 
-  const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
-
-  const user = await repo.createUser({
-    name: input.name,
-    email: input.email,
-    passwordHash,
-  });
+  let user: Awaited<ReturnType<typeof repo.createUser>>;
+  try {
+    user = await repo.createUser({ name: input.name, email: input.email, passwordHash });
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === "P2002") {
+      // Unique-email race: another request registered the address between our lookup and insert.
+      const winner = await repo.findUserByEmail(input.email);
+      if (winner) await notifyExistingAccount(winner);
+      return;
+    }
+    throw err;
+  }
 
   logger.info({ msg: "User signed up", userId: user.id });
 
-  // Send verification email (non-blocking — don't fail signup if email
-  // delivery is misconfigured; the user can request a resend later)
-  sendVerificationEmail(user.id, user.email, user.name).catch((err) => {
-    logger.error({ msg: "Failed to send verification email after signup", userId: user.id, err });
+  // Verification e-mail failure must not undo the signup: the account exists and the owner can request a resend after logging in.
+  await sendVerificationEmail(user.id, user.email, user.name).catch((err) => {
+    logger.error({ msg: "Failed to send verification email after signup", userId: user.id, errorName: err instanceof Error ? err.name : "unknown" });
   });
+}
 
-  // Create session immediately — user is logged in after signup
-  const sessionToken = await createSessionForUser(user);
-
-  return {
-    user: toAuthUser(user),
-    sessionToken,
-  };
+async function notifyExistingAccount(user: { id: string; email: string; name: string }): Promise<void> {
+  const template = emailTemplates.signupExistingAccount({
+    name: user.name,
+    loginUrl: `${env.APP_URL}/login`,
+    resetUrl: `${env.APP_URL}/forgot-password`,
+  });
+  await sendEmail({ ...template, to: user.email }).catch((err) => {
+    logger.error({ msg: "Failed to send existing-account notice", userId: user.id, errorName: err instanceof Error ? err.name : "unknown" });
+  });
 }
 
 /* -------------------------------------------------------------------------
