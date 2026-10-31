@@ -4,11 +4,20 @@
  * Counter storage for the rate limiter: a Redis store (atomic, shared by every app instance), a bounded in-process store
  * (per instance), and a ResilientStore that decides what happens when Redis is unavailable.
  *
- * ATOMICITY. A counter is created WITH its expiry in one Lua script: INCR, and if the key has no TTL (new key, or one
- * stranded without expiry by an earlier crash) PEXPIRE it - all inside a single Redis command, so there is no window in
- * which a counter exists without an expiry (the INCR-then-EXPIRE race that can leave a key, and therefore a lockout, forever).
- * The TTL is set only when absent: later hits NEVER extend it, so traffic during a lockout cannot keep it alive. Parallel
- * requests are serialised by Redis, so with a limit of N exactly N concurrent requests are admitted.
+ * ALGORITHM: EXACT SLIDING-WINDOW LOG. Each counter keeps the timestamps of the requests it ADMITTED during the last
+ * `windowSeconds`. A request is admitted only if fewer than `max` admitted timestamps are younger than the window; a refused
+ * request records nothing. Consequences, all covered by tests:
+ *   - at most `max` requests are admitted in ANY interval of length `windowSeconds` (the fixed-window design this replaces
+ *     admitted up to 2x `max` within a few milliseconds across a window boundary);
+ *   - a refused request never extends a block, so traffic during a lockout cannot keep it alive, and Retry-After is exact:
+ *     the moment the oldest admitted timestamp leaves the window;
+ *   - there is no state that outlives its usefulness: the key expires `windowSeconds` after the last admission.
+ * Cost: memory is O(max) per counter (<= a few hundred entries with the default policy; the policy caps `max` at 10 000).
+ *
+ * ATOMICITY (Redis). Pruning, counting and recording happen in ONE Lua script, and the key's expiry is set by the same script
+ * on every admission, so there is no window in which a counter exists without an expiry and no read-then-write race: with a
+ * limit of N, exactly N concurrent requests are admitted, from one instance or many. Time comes from Redis (TIME), so
+ * application instances with skewed clocks agree.
  *
  * WHEN REDIS IS DOWN (ResilientStore). Protection is never silently dropped:
  *   - "memory" (default): the same policy is enforced by the in-process store. Limits are then per instance, so with k
@@ -20,21 +29,25 @@
  *
  * Nothing in this file logs keys (they are keyed hashes, but there is no reason to write them to logs).
  */
+import { randomUUID } from "node:crypto";
 import { ServiceUnavailableException } from "@/lib/api-response";
 
 export interface HitResult {
-  /** Counter value after this hit (1 = first request in the window). */
+  /** True when the request was admitted (and recorded). False when `max` admitted requests are already inside the window. */
+  allowed: boolean;
+  /** Admitted requests currently inside the window, including this one when it was admitted. */
   count: number;
-  /** Milliseconds until the window ends and the counter disappears. */
-  ttlMs: number;
+  /** When refused: milliseconds until a slot frees up (the oldest admitted request leaves the window). 0 when admitted. */
+  retryAfterMs: number;
 }
 
 export interface CounterStore {
-  /** Atomically increments `key`, creating it with a `windowSeconds` expiry if it has none. Never extends an existing expiry. */
-  hit(key: string, windowSeconds: number): Promise<HitResult>;
-  /** Decrements `key` but never below zero (a counter reaching zero is deleted). */
-  decrFloor(key: string): Promise<void>;
-  del(key: string): Promise<void>;
+  /** Atomically admits-and-records the request if fewer than `max` are inside the last `windowSeconds`; otherwise refuses without recording. */
+  hit(key: string, windowSeconds: number, max: number): Promise<HitResult>;
+  /** Removes the most recent admitted entry of `key` (undo one admission, e.g. a login that turned out to be legitimate). No-op when empty. */
+  refund(key: string): Promise<void>;
+  /** Forgets every entry of `key` (e.g. a successful login clears the account+IP counter). */
+  reset(key: string): Promise<void>;
   setFlag(key: string, ttlSeconds: number): Promise<void>;
   hasFlag(key: string): Promise<boolean>;
 }
@@ -42,22 +55,25 @@ export interface CounterStore {
 /* --------------------------------- Redis ---------------------------------- */
 
 export const HIT_SCRIPT = `
-local c = redis.call('INCR', KEYS[1])
-local t = redis.call('PTTL', KEYS[1])
-if t < 0 then
-  redis.call('PEXPIRE', KEYS[1], ARGV[1])
-  t = tonumber(ARGV[1])
+local t = redis.call('TIME')
+local now = t[1] * 1000 + math.floor(t[2] / 1000)
+local windowMs = tonumber(ARGV[1])
+local max = tonumber(ARGV[2])
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - windowMs)
+local n = redis.call('ZCARD', KEYS[1])
+if n < max then
+  redis.call('ZADD', KEYS[1], now, ARGV[3])
+  redis.call('PEXPIRE', KEYS[1], windowMs)
+  return {1, n + 1, 0}
 end
-return {c, t}
+local oldest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')
+local retry = tonumber(oldest[2]) + windowMs - now
+if retry < 1 then retry = 1 end
+return {0, n, retry}
 `;
 
-export const DECR_FLOOR_SCRIPT = `
-local v = tonumber(redis.call('GET', KEYS[1]) or '0')
-if v > 1 then
-  redis.call('DECR', KEYS[1])
-else
-  redis.call('DEL', KEYS[1])
-end
+export const REFUND_SCRIPT = `
+redis.call('ZPOPMAX', KEYS[1])
 return 0
 `;
 
@@ -72,18 +88,17 @@ export interface RedisLike {
 export class RedisStore implements CounterStore {
   constructor(private readonly redis: RedisLike) {}
 
-  async hit(key: string, windowSeconds: number): Promise<HitResult> {
-    const res = await this.redis.eval(HIT_SCRIPT, 1, key, windowSeconds * 1000);
-    if (!Array.isArray(res) || res.length !== 2) throw new Error("Redis returned an unexpected hit result");
-    const count = Number(res[0]);
-    const ttlMs = Number(res[1]);
-    if (!Number.isFinite(count) || !Number.isFinite(ttlMs)) throw new Error("Redis returned a non-numeric hit result");
-    return { count, ttlMs };
+  async hit(key: string, windowSeconds: number, max: number): Promise<HitResult> {
+    const res = await this.redis.eval(HIT_SCRIPT, 1, key, windowSeconds * 1000, max, randomUUID());
+    if (!Array.isArray(res) || res.length !== 3) throw new Error("Redis returned an unexpected hit result");
+    const [allowed, count, retryAfterMs] = [Number(res[0]), Number(res[1]), Number(res[2])];
+    if (![allowed, count, retryAfterMs].every(Number.isFinite)) throw new Error("Redis returned a non-numeric hit result");
+    return { allowed: allowed === 1, count, retryAfterMs };
   }
-  async decrFloor(key: string): Promise<void> {
-    await this.redis.eval(DECR_FLOOR_SCRIPT, 1, key);
+  async refund(key: string): Promise<void> {
+    await this.redis.eval(REFUND_SCRIPT, 1, key);
   }
-  async del(key: string): Promise<void> {
+  async reset(key: string): Promise<void> {
     await this.redis.del(key);
   }
   async setFlag(key: string, ttlSeconds: number): Promise<void> {
@@ -96,10 +111,11 @@ export class RedisStore implements CounterStore {
 
 /* -------------------------------- in-process ------------------------------- */
 
-interface Entry { count: number; expiresAt: number }
+interface Entry { times: number[]; windowMs: number }
 
 export class MemoryStore implements CounterStore {
   private readonly map = new Map<string, Entry>();
+  private readonly flags = new Map<string, number>();
   constructor(
     private readonly now: () => number = Date.now,
     private readonly maxKeys = 10_000
@@ -107,17 +123,20 @@ export class MemoryStore implements CounterStore {
 
   /** Number of live keys (for tests and metrics). */
   get size(): number {
-    return this.map.size;
+    return this.map.size + this.flags.size;
   }
 
   /** Live keys (for tests: asserting that no identifier or address is stored in clear). */
   keys(): string[] {
-    return [...this.map.keys()];
+    return [...this.map.keys(), ...this.flags.keys()];
   }
 
-  private live(key: string): Entry | undefined {
-    const e = this.map.get(key);
-    if (e && e.expiresAt <= this.now()) {
+  private prune(key: string, e: Entry): Entry | undefined {
+    const cutoff = this.now() - e.windowMs;
+    let i = 0;
+    while (i < e.times.length && e.times[i]! <= cutoff) i++;
+    if (i > 0) e.times.splice(0, i);
+    if (e.times.length === 0) {
       this.map.delete(key);
       return undefined;
     }
@@ -125,12 +144,13 @@ export class MemoryStore implements CounterStore {
   }
 
   private makeRoom(): void {
-    if (this.map.size < this.maxKeys) return;
+    if (this.map.size + this.flags.size < this.maxKeys) return;
     const t = this.now();
-    for (const [k, e] of this.map) if (e.expiresAt <= t) this.map.delete(k);
-    // Still full: drop the oldest ~10% (Map iterates in insertion order). Bounds memory under a key-flood; an attacker would
-    // need thousands of distinct client buckets to evict anything, and per-IP limits cap how fast those can be created.
-    if (this.map.size >= this.maxKeys) {
+    for (const [k, e] of this.map) if (e.times.length === 0 || e.times[e.times.length - 1]! + e.windowMs <= t) this.map.delete(k);
+    for (const [k, exp] of this.flags) if (exp <= t) this.flags.delete(k);
+    // Still full: drop the oldest ~10% (Map iterates in insertion order). Bounds memory under a key-flood; an attacker
+    // would need thousands of distinct client buckets to evict anything, and per-IP limits cap how fast those can be created.
+    if (this.map.size + this.flags.size >= this.maxKeys) {
       let drop = Math.ceil(this.maxKeys / 10);
       for (const k of this.map.keys()) {
         if (drop-- <= 0) break;
@@ -139,32 +159,46 @@ export class MemoryStore implements CounterStore {
     }
   }
 
-  async hit(key: string, windowSeconds: number): Promise<HitResult> {
-    const e = this.live(key);
+  async hit(key: string, windowSeconds: number, max: number): Promise<HitResult> {
+    const windowMs = windowSeconds * 1000;
+    const now = this.now();
+    let e = this.map.get(key);
     if (e) {
-      e.count += 1;
-      return { count: e.count, ttlMs: e.expiresAt - this.now() };
+      e.windowMs = windowMs;
+      e = this.prune(key, e);
     }
-    this.makeRoom();
-    const created = { count: 1, expiresAt: this.now() + windowSeconds * 1000 };
-    this.map.set(key, created);
-    return { count: 1, ttlMs: windowSeconds * 1000 };
+    if (!e) {
+      this.makeRoom();
+      e = { times: [], windowMs };
+    }
+    if (e.times.length < max) {
+      e.times.push(now);
+      this.map.set(key, e);
+      return { allowed: true, count: e.times.length, retryAfterMs: 0 };
+    }
+    return { allowed: false, count: e.times.length, retryAfterMs: Math.max(1, e.times[0]! + windowMs - now) };
   }
-  async decrFloor(key: string): Promise<void> {
-    const e = this.live(key);
+  async refund(key: string): Promise<void> {
+    const e = this.map.get(key);
     if (!e) return;
-    if (e.count > 1) e.count -= 1;
-    else this.map.delete(key);
+    e.times.pop();
+    if (e.times.length === 0) this.map.delete(key);
   }
-  async del(key: string): Promise<void> {
+  async reset(key: string): Promise<void> {
     this.map.delete(key);
   }
   async setFlag(key: string, ttlSeconds: number): Promise<void> {
     this.makeRoom();
-    this.map.set(key, { count: 1, expiresAt: this.now() + ttlSeconds * 1000 });
+    this.flags.set(key, this.now() + ttlSeconds * 1000);
   }
   async hasFlag(key: string): Promise<boolean> {
-    return this.live(key) !== undefined;
+    const exp = this.flags.get(key);
+    if (exp === undefined) return false;
+    if (exp <= this.now()) {
+      this.flags.delete(key);
+      return false;
+    }
+    return true;
   }
 }
 
@@ -233,9 +267,9 @@ export class ResilientStore implements CounterStore {
     return op(this.o.fallback);
   }
 
-  hit(key: string, windowSeconds: number) { return this.run((s) => s.hit(key, windowSeconds)); }
-  decrFloor(key: string) { return this.run((s) => s.decrFloor(key)); }
-  del(key: string) { return this.run((s) => s.del(key)); }
+  hit(key: string, windowSeconds: number, max: number) { return this.run((s) => s.hit(key, windowSeconds, max)); }
+  refund(key: string) { return this.run((s) => s.refund(key)); }
+  reset(key: string) { return this.run((s) => s.reset(key)); }
   setFlag(key: string, ttlSeconds: number) { return this.run((s) => s.setFlag(key, ttlSeconds)); }
   hasFlag(key: string) { return this.run((s) => s.hasFlag(key)); }
 }

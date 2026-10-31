@@ -1,8 +1,8 @@
 /**
  * REAL-Redis integration test for the rate limiter store and limiter (Pre-5C release gate).
  *
- * Runs only when REDIS_INTEGRATION_URL points at a DISPOSABLE Redis (it writes and deletes keys under `rl:itest:*` and
- * `rl:v1:*` with a random per-run HMAC secret; never point it at production). Without that variable the whole file is skipped
+ * Runs only when REDIS_INTEGRATION_URL points at a DISPOSABLE Redis (it uses logical database 5 and FLUSHES it at the end;
+ * never point it at production). Without that variable the whole file is skipped
  * and reported as skipped, not as passed. CI sets it, and the gate fails if anything is skipped.
  *
  *   redis-server --port 63799 --save "" --appendonly no --daemonize yes
@@ -30,54 +30,83 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 d("rate limiter against a real Redis", () => {
   let admin: Redis; let instA: Redis; let instB: Redis;
   beforeAll(async () => {
-    admin = new Redis(URL_!); instA = new Redis(URL_!); instB = new Redis(URL_!);
+    // Own logical database: other integration files run in parallel against the same Redis and must not see (or delete) these keys.
+    admin = new Redis(URL_!, { db: 5 }); instA = new Redis(URL_!, { db: 5 }); instB = new Redis(URL_!, { db: 5 });
     await Promise.all([admin.ping(), instA.ping(), instB.ping()]);
   });
   afterAll(async () => {
-    const keys = [...(await admin.keys(`rl:itest:${run}:*`)), ...(await admin.keys("rl:v1:*"))];
-    if (keys.length) await admin.del(...keys);
+    await admin.flushdb(); // db 5 is private to this file
     admin.disconnect(); instA.disconnect(); instB.disconnect();
   });
 
-  describe("RedisStore.hit (Lua)", () => {
-    it("creates the counter WITH its expiry in one step and never extends it", async () => {
+  describe("RedisStore.hit (Lua sliding-window log)", () => {
+    it("admits exactly `max`, refuses without recording, sets an expiry of at most one window and never lengthens it by refusing", async () => {
       const s = new RedisStore(instA);
-      const first = await s.hit(k("ttl"), 30);
-      expect(first.count).toBe(1);
-      const t1 = await admin.pttl(k("ttl"));
+      for (let i = 1; i <= 3; i++) expect(await s.hit(k("basic"), 30, 3)).toMatchObject({ allowed: true, count: i, retryAfterMs: 0 });
+      const t1 = await admin.pttl(k("basic"));
       expect(t1).toBeGreaterThan(0); expect(t1).toBeLessThanOrEqual(30_000);
-      await sleep(300);
-      const second = await s.hit(k("ttl"), 30);
-      expect(second.count).toBe(2);
-      const t2 = await admin.pttl(k("ttl"));
-      expect(t2).toBeLessThan(t1); // the window kept running; hits did not reset it
-      expect(second.ttlMs).toBeLessThanOrEqual(t1);
+      await sleep(200);
+      for (let i = 0; i < 25; i++) expect((await s.hit(k("basic"), 30, 3)).allowed).toBe(false);
+      expect(await admin.zcard(k("basic"))).toBe(3); // refused requests recorded nothing
+      expect(await admin.pttl(k("basic"))).toBeLessThan(t1); // and did not restart the clock
+      const refused = await s.hit(k("basic"), 30, 3);
+      expect(refused.retryAfterMs).toBeGreaterThan(29_000); expect(refused.retryAfterMs).toBeLessThanOrEqual(30_000);
     });
-    it("heals a counter stranded WITHOUT an expiry (the old INCR-then-EXPIRE failure mode)", async () => {
-      await admin.set(k("stranded"), "41"); // no TTL: would block forever under a naive implementation
-      expect(await admin.pttl(k("stranded"))).toBe(-1);
-      const r = await new RedisStore(instA).hit(k("stranded"), 20);
-      expect(r.count).toBe(42);
-      expect(await admin.pttl(k("stranded"))).toBeGreaterThan(0);
-    });
-    it("is atomic under concurrency from two connections: 200 parallel hits yield exactly the counts 1..200, once each", async () => {
+    it("is atomic under concurrency from two connections: 200 parallel hits against max=50 admit exactly 50", async () => {
       const a = new RedisStore(instA); const b = new RedisStore(instB);
-      const res = await Promise.all(Array.from({ length: 200 }, (_, i) => (i % 2 ? a : b).hit(k("conc"), 30)));
-      expect(res.map((r) => r.count).sort((x, y) => x - y)).toEqual(Array.from({ length: 200 }, (_, i) => i + 1));
+      const res = await Promise.all(Array.from({ length: 200 }, (_, i) => (i % 2 ? a : b).hit(k("conc"), 30, 50)));
+      expect(res.filter((r) => r.allowed)).toHaveLength(50);
+      expect(res.filter((r) => r.allowed).map((r) => r.count).sort((x, y) => x - y)).toEqual(Array.from({ length: 50 }, (_, i) => i + 1));
+      expect(await admin.zcard(k("conc"))).toBe(50);
       expect(await admin.pttl(k("conc"))).toBeGreaterThan(0);
     });
-    it("the window really ends and a fresh one starts (real TTL expiry)", async () => {
+    it("the window SLIDES in real time and Retry-After is exact", async () => {
       const s = new RedisStore(instA);
-      await s.hit(k("expire"), 1); await s.hit(k("expire"), 1);
-      await sleep(1_150);
-      expect((await s.hit(k("expire"), 1)).count).toBe(1);
+      await s.hit(k("slide"), 1, 2); await s.hit(k("slide"), 1, 2);
+      const refused = await s.hit(k("slide"), 1, 2);
+      expect(refused.allowed).toBe(false); expect(refused.retryAfterMs).toBeGreaterThan(0); expect(refused.retryAfterMs).toBeLessThanOrEqual(1_000);
+      await sleep(refused.retryAfterMs + 60);
+      expect((await s.hit(k("slide"), 1, 2)).allowed).toBe(true);
     });
-    it("decrFloor decrements, never below zero, and removes an emptied counter", async () => {
+    it("REGRESSION (fixed-window 2x burst) against the real script: a burst at the end of a window and another right after it admit `max` in total, not 2x", async () => {
+      const s = new RedisStore(instA); const MAX = 3; const WINDOW_S = 2;
+      expect((await s.hit(k("burst"), WINDOW_S, MAX)).allowed).toBe(true); // t=0: "opens" what a fixed window would call window 1
+      await sleep(1_700);
+      const nearEnd = await Promise.all(Array.from({ length: 6 }, () => s.hit(k("burst"), WINDOW_S, MAX)));
+      await sleep(450); // t~2.15 s: a fixed window would have restarted; the t=0 entry (only) has left the sliding window
+      const justAfter = await Promise.all(Array.from({ length: 6 }, () => s.hit(k("burst"), WINDOW_S, MAX)));
+      expect(nearEnd.filter((r) => r.allowed)).toHaveLength(MAX - 1);
+      expect(justAfter.filter((r) => r.allowed)).toHaveLength(1);
+    });
+    it("the key disappears once its window has passed (no state outlives its usefulness)", async () => {
+      await new RedisStore(instA).hit(k("gone"), 1, 5);
+      await sleep(1_200);
+      expect(await admin.exists(k("gone"))).toBe(0);
+    });
+    it("heals a stranded entry set without an expiry: stale entries age out and the next admission sets the TTL", async () => {
+      await admin.zadd(k("stranded"), Date.now() - 3_600_000, "ancient"); // no TTL, entry far outside any window
+      expect(await admin.pttl(k("stranded"))).toBe(-1);
+      expect(await new RedisStore(instA).hit(k("stranded"), 20, 1)).toMatchObject({ allowed: true, count: 1 });
+      expect(await admin.pttl(k("stranded"))).toBeGreaterThan(0);
+    });
+    it("uses the SERVER clock: a request is admitted again exactly when Redis says the oldest entry leaves", async () => {
       const s = new RedisStore(instA);
-      await s.hit(k("dec"), 60); await s.hit(k("dec"), 60); await s.hit(k("dec"), 60);
-      await s.decrFloor(k("dec")); expect(await admin.get(k("dec"))).toBe("2");
-      await s.decrFloor(k("dec")); await s.decrFloor(k("dec")); await s.decrFloor(k("dec"));
-      expect(await admin.exists(k("dec"))).toBe(0);
+      await s.hit(k("clock"), 60, 1);
+      const [score] = (await admin.zrange(k("clock"), 0, 0, "WITHSCORES")).slice(1).map(Number);
+      const [secs, micros] = (await admin.time()).map(Number);
+      expect(Math.abs(score! - (secs! * 1000 + Math.floor(micros! / 1000)))).toBeLessThan(2_000);
+    });
+    it("refund removes the NEWEST entry only, never errors on an empty key; reset removes the key", async () => {
+      const s = new RedisStore(instA);
+      await s.hit(k("ref"), 60, 5); await sleep(5); await s.hit(k("ref"), 60, 5); await sleep(5); await s.hit(k("ref"), 60, 5);
+      const before = await admin.zrange(k("ref"), 0, -1, "WITHSCORES");
+      await s.refund(k("ref"));
+      const after = await admin.zrange(k("ref"), 0, -1, "WITHSCORES");
+      expect(after).toHaveLength(before.length - 2);
+      expect(after.slice(0, 4)).toEqual(before.slice(0, 4)); // the two oldest remain
+      await s.refund(k("ref")); await s.refund(k("ref")); await s.refund(k("ref")); // past empty: no error
+      expect(await admin.exists(k("ref"))).toBe(0);
+      await s.hit(k("ref"), 60, 5); await s.reset(k("ref")); expect(await admin.exists(k("ref"))).toBe(0);
     });
     it("flags set, expire and are visible from another connection", async () => {
       await new RedisStore(instA).setFlag(k("flag"), 1);
@@ -118,6 +147,23 @@ d("rate limiter against a real Redis", () => {
       const keys = await admin.keys("rl:v1:*");
       expect(keys.length).toBeGreaterThan(0);
       expect(keys.join("\n")).not.toMatch(/private|person|example\.test/i);
+    });
+  });
+
+  describe("AI workspace limit and shared-address login on real Redis", () => {
+    const limiterOn = (r: Redis) => new RateLimiter({ store: new RedisStore(r), policy: DEFAULT_POLICY, secret });
+    it("AI: 100 parallel executions across two 'instances' admit exactly the workspace limit", async () => {
+      const A = limiterOn(instA); const B = limiterOn(instB);
+      const out = await Promise.all(Array.from({ length: 100 }, (_, i) => (i % 2 ? A : B).checkWorkspaceAi("ws_itest")));
+      expect(out.filter((r) => r.allowed)).toHaveLength(DEFAULT_POLICY.aiExecution.workspace.max);
+    });
+    it("login: successes refund the per-IP flood counter on real Redis (hundreds of people behind one address are not throttled)", async () => {
+      const L = limiterOn(instA); const shared = ip("100.64.9.9");
+      for (let i = 0; i < DEFAULT_POLICY.login.ip.max * 3; i++) {
+        await L.enforceIp("login", shared);
+        await (await L.beginLogin(shared, `p${i}@example.test`)).succeeded();
+      }
+      expect(await admin.zcard("rl:v1:login:ip:100.64.9.9")).toBe(0);
     });
   });
 

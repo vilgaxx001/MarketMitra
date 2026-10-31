@@ -9,14 +9,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const m = vi.hoisted(() => ({
-  login: vi.fn(), signup: vi.fn(), requestPasswordReset: vi.fn(), resetPassword: vi.fn(), verifyEmail: vi.fn(),
+  login: vi.fn(), registerAccount: vi.fn(), assertSignupsEnabled: vi.fn(), requestPasswordReset: vi.fn(), resetPassword: vi.fn(), verifyEmail: vi.fn(),
   setSessionCookie: vi.fn(), clearSessionCookie: vi.fn(), sendEmail: vi.fn(),
   warn: vi.fn(), error: vi.fn(), info: vi.fn(),
   afterQueue: [] as Array<() => unknown>,
 }));
-vi.mock("@/modules/auth/service", () => ({ login: m.login, signup: m.signup, requestPasswordReset: m.requestPasswordReset, resetPassword: m.resetPassword, verifyEmail: m.verifyEmail }));
+vi.mock("@/modules/auth/service", () => ({ login: m.login, registerAccount: m.registerAccount, assertSignupsEnabled: m.assertSignupsEnabled, requestPasswordReset: m.requestPasswordReset, resetPassword: m.resetPassword, verifyEmail: m.verifyEmail }));
 vi.mock("@/modules/auth/session", () => ({ setSessionCookie: m.setSessionCookie, clearSessionCookie: m.clearSessionCookie, getCurrentSession: vi.fn() }));
-vi.mock("@/lib/email", () => ({ sendEmail: m.sendEmail }));
+vi.mock("@/lib/email", async (orig) => ({ ...(await orig<typeof import("@/lib/email")>()), sendEmail: m.sendEmail }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: m.warn, error: m.error, info: m.info, debug: vi.fn() } }));
 vi.mock("next/server", async (orig) => ({ ...(await orig<typeof import("next/server")>()), after: (fn: () => unknown) => { m.afterQueue.push(fn); } }));
 
@@ -72,7 +72,7 @@ beforeEach(async () => {
   for (const f of Object.values(m)) if (typeof f === "function") (f as ReturnType<typeof vi.fn>).mockReset();
   m.afterQueue.length = 0; n = 0;
   await load();
-  m.login.mockImplementation(async () => { throw unauth(); }); m.signup.mockResolvedValue({ user: { id: "u2", email: "x@example.test", name: "X", emailVerifiedAt: null }, sessionToken: "t" });
+  m.login.mockImplementation(async () => { throw unauth(); }); m.registerAccount.mockResolvedValue(undefined);
   m.requestPasswordReset.mockResolvedValue(undefined); m.resetPassword.mockResolvedValue(undefined); m.verifyEmail.mockResolvedValue(undefined);
 });
 afterEach(() => { vi.unstubAllEnvs(); });
@@ -208,12 +208,96 @@ describe("signup / contact: per-e-mail limits keyed on the normalised address", 
     const variants = ["new@example.test", "NEW@Example.test", "new@example.test"];
     const statuses: number[] = [];
     for (let i = 0; i < variants.length; i++) statuses.push((await routes.signup!(post(signupBody(variants[i]!), ipHdr(`203.0.113.${60 + i}`)))).status);
-    expect(statuses).toEqual([201, 201, 429]);
-    expect(m.signup).toHaveBeenCalledTimes(2);
+    expect(statuses).toEqual([202, 202, 429]);
+    await Promise.all(m.afterQueue.map((f) => f()));
+    expect(m.registerAccount).toHaveBeenCalledTimes(2);
   });
   it("contact: the third message from one address is refused even from a fresh IP", async () => {
     const msg = (ip: string) => post({ name: "Ann", email: "ann@example.test", topic: "general", message: "Hello there, a long enough message." }, ipHdr(ip));
     expect([(await routes.contact!(msg("203.0.113.70"))).status, (await routes.contact!(msg("203.0.113.71"))).status, (await routes.contact!(msg("203.0.113.72"))).status]).toEqual([200, 200, 429]);
+  });
+});
+
+describe("signup: no account-existence oracle (status, body, headers, timing)", () => {
+  const send = (email: string, ip: string) => routes.signup!(post(signupBody(email), ipHdr(ip)));
+  const visible = async (r: Response) => ({ status: r.status, body: await r.text(), cookie: r.headers.get("set-cookie"), type: r.headers.get("content-type"), cache: r.headers.get("cache-control") });
+
+  it("a new address and an address that is already registered get byte-identical responses, and neither sets a session cookie", async () => {
+    // What the service does with each address is irrelevant to the response: it runs after it. Model both outcomes anyway.
+    m.registerAccount.mockImplementation(async (i: { email: string }) => { if (i.email === "taken@example.test") throw Object.assign(new Error("exists"), { name: "Existing" }); });
+    const fresh = await visible(await send("brand-new@example.test", "203.0.113.91"));
+    const taken = await visible(await send("taken@example.test", "203.0.113.92"));
+    expect(fresh).toEqual(taken);
+    expect(fresh.status).toBe(202);
+    expect(fresh.cookie).toBeNull();
+    expect(m.setSessionCookie).not.toHaveBeenCalled();
+    expect(fresh.body).not.toMatch(/already exists|CONFLICT|"user"|"id"/);
+  });
+  it("the work happens AFTER the response: nothing reaches the service until the deferred queue runs, and a slow or failing service cannot change the answer or its latency", async () => {
+    m.registerAccount.mockImplementation(() => new Promise((_, reject) => setTimeout(() => reject(new Error("db down for jane@example.test")), 3_000)));
+    const t0 = Date.now();
+    const res = await send("jane@example.test", "203.0.113.93");
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    expect(res.status).toBe(202);
+    expect(m.registerAccount).not.toHaveBeenCalled();
+    expect(m.afterQueue).toHaveLength(1);
+  });
+  it("a failure in the deferred work is swallowed and logged by error NAME only (the message can carry the address)", async () => {
+    m.registerAccount.mockRejectedValue(Object.assign(new Error("duplicate key for jane@example.test"), { name: "PrismaClientKnownRequestError" }));
+    await send("jane@example.test", "203.0.113.94");
+    await expect(Promise.all(m.afterQueue.map((f) => f()))).resolves.toBeDefined();
+    const failed = m.error.mock.calls.filter((c) => c[0]?.msg === "signup_registration_failed");
+    expect(failed).toHaveLength(1);
+    expect(JSON.stringify(m.error.mock.calls)).not.toMatch(/jane|example\.test/);
+  });
+  it("the platform-wide signup switch answers 403 for EVERYONE (it says nothing about any address)", async () => {
+    m.assertSignupsEnabled.mockImplementation(() => { throw new ApiExceptionCtor("FORBIDDEN", "New signups are currently disabled."); });
+    const a = await visible(await send("one@example.test", "203.0.113.95"));
+    const b = await visible(await send("two@example.test", "203.0.113.96"));
+    expect(a.status).toBe(403); expect(a).toEqual(b);
+    expect(m.afterQueue).toHaveLength(0);
+  });
+  it("the per-address limit is keyed on what was submitted: it answers 429 for a new and for an existing address alike", async () => {
+    const codes: number[] = [];
+    for (let i = 0; i < 3; i++) codes.push((await send("anyone@example.test", `203.0.113.${100 + i}`)).status);
+    expect(codes).toEqual([202, 202, 429]);
+  });
+});
+
+describe("contact: anonymous input is escaped and personal data stays out of the logs", () => {
+  const msg = (over: Record<string, string> = {}) => ({ name: "Ann", email: "ann@example.test", topic: "general", message: "Hello there, a long enough message.", ...over });
+  beforeEach(async () => { vi.stubEnv("CONTACT_INBOX_EMAIL", "inbox@example.test"); await load({ CONTACT_INBOX_EMAIL: "inbox@example.test" }); m.sendEmail.mockResolvedValue({ messageId: "m" }); });
+  it("HTML in name, e-mail and message reaches the staff inbox as TEXT, not markup", async () => {
+    const res = await routes.contact!(post(msg({ name: `<img src=x onerror=alert(1)>Eve`, email: `"><script>x</script>@example.test`, message: `<script>alert(1)</script>\n<a href="https://evil.example">click</a>` }), ipHdr("203.0.113.120")));
+    // the schema may reject a hostile e-mail outright (400); either way no markup may be delivered
+    if (res.status === 200) {
+      const sent = m.sendEmail.mock.calls[0]![0];
+      expect(sent.to).toBe("inbox@example.test");
+      expect(sent.html).not.toMatch(/<script|<img|<a href="https:\/\/evil|onerror=/i);
+      expect(sent.html).toContain("&lt;script&gt;");
+    } else expect(res.status).toBe(400);
+  });
+  it("a hostile NAME with markup (valid e-mail) is delivered escaped and the subject stays one line", async () => {
+    const res = await routes.contact!(post(msg({ name: `<b>Bob</b>\r\nBcc: x@example.test`, message: `line one is long enough\nline two <i>x</i>` }), ipHdr("203.0.113.121")));
+    expect(res.status).toBe(200);
+    const sent = m.sendEmail.mock.calls[0]![0];
+    expect(sent.html).not.toMatch(/<b>|<i>/);
+    expect(sent.html).toContain("&lt;b&gt;Bob&lt;/b&gt;");
+    expect(sent.html).toContain("line one is long enough<br>line two");
+    expect(sent.subject).not.toMatch(/[\r\n]/);
+  });
+  it("the log line carries topic, length and a keyed reference: no name, no address, no message text", async () => {
+    await routes.contact!(post(msg({ name: "Distinctive Name", email: "distinctive.person@example.test", message: "A very distinctive confidential sentence." }), ipHdr("203.0.113.122")));
+    const logged = JSON.stringify([...m.info.mock.calls, ...m.warn.mock.calls, ...m.error.mock.calls]);
+    expect(logged).toContain("contact_form_submission");
+    expect(logged).not.toMatch(/Distinctive|distinctive|confidential|example\.test/);
+  });
+  it("with no CONTACT_INBOX_EMAIL the submission is NOT silently swallowed: a warning says it was not delivered", async () => {
+    vi.stubEnv("CONTACT_INBOX_EMAIL", undefined as unknown as string); await load();
+    const res = await routes.contact!(post(msg(), ipHdr("203.0.113.123")));
+    expect(res.status).toBe(200);
+    expect(m.sendEmail).not.toHaveBeenCalled();
+    expect(m.warn.mock.calls.some((c) => c[0]?.msg === "contact_form_not_delivered")).toBe(true);
   });
 });
 

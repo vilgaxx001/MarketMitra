@@ -98,6 +98,14 @@ export function allowEmail(endpoint: EmailEndpoint, email: string): Promise<bool
   return getLimiter().allowEmail(endpoint, email);
 }
 
+/**
+ * Per-workspace AI execution limit. Never unlimited: with Redis down it enforces the same limit in this process, or throws
+ * ServiceUnavailableException when RATE_LIMIT_ON_STORE_FAILURE=deny.
+ */
+export function checkWorkspaceAiLimit(workspaceId: string, maxOverride?: number) {
+  return getLimiter().checkWorkspaceAi(workspaceId, maxOverride);
+}
+
 /** Counts one login attempt (per IP, per account+IP, per account for unrecognised IPs); throws RateLimitedException when exhausted. */
 export function beginLoginAttempt(ip: ClientIp, email: string): Promise<LoginAttempt> {
   return getLimiter().beginLogin(ip, email);

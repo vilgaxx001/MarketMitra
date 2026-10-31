@@ -35,3 +35,26 @@ describe("parsePolicy", () => {
     if (!r.ok) expect(r.error).toMatch(/^RATE_LIMIT_POLICY_JSON is /);
   });
 });
+
+describe("policy additions: AI execution limit, shared-address defaults, bounded maxima", () => {
+  it("the AI execution limit has a documented default (20 / 60 s per workspace) and is overridable", () => {
+    expect(DEFAULT_POLICY.aiExecution.workspace).toEqual({ max: 20, windowSeconds: 60 });
+    const r = parsePolicy(JSON.stringify({ aiExecution: { workspace: { max: 5 } } }));
+    expect(r.ok && r.policy.aiExecution.workspace).toEqual({ max: 5, windowSeconds: 60 });
+  });
+  it("rejects a typo in the AI override like any other", () => {
+    expect(parsePolicy(JSON.stringify({ aiExecution: { workspaces: { max: 5 } } })).ok).toBe(false);
+    expect(parsePolicy(JSON.stringify({ aiExecution: { workspace: { max: 0 } } })).ok).toBe(false);
+  });
+  it("the sliding-window log keeps one entry per admitted request, so `max` is capped at 10 000", () => {
+    expect(parsePolicy(JSON.stringify({ login: { ip: { max: 10_000 } } })).ok).toBe(true);
+    expect(parsePolicy(JSON.stringify({ login: { ip: { max: 10_001 } } })).ok).toBe(false);
+  });
+  it("shared-address (CGNAT) sizing: the per-IP ceilings sit well above the strict per-person controls", () => {
+    const d = DEFAULT_POLICY;
+    expect(d.login.ip.max).toBeGreaterThanOrEqual(10 * d.login.accountIp.max); // one shared address >> one person mistyping
+    for (const e of [d.signup, d.forgotPassword, d.contact]) expect(e.ip.max).toBeGreaterThan(e.email.max);
+    expect(d.resetPassword.ip.max).toBeGreaterThanOrEqual(30);
+    expect(d.verifyEmail.ip.max).toBeGreaterThanOrEqual(30);
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { RateLimiter, normalizeIdentifier } from "@/lib/rate-limit/limiter";
-import { DEFAULT_POLICY } from "@/lib/rate-limit/policy";
+import { RateLimiter, normalizeIdentifier, MAX_EFFECTIVE_LIMIT } from "@/lib/rate-limit/limiter";
+import { DEFAULT_POLICY, type RateLimitPolicy } from "@/lib/rate-limit/policy";
 import { MemoryStore, ResilientStore, type CounterStore } from "@/lib/rate-limit/store";
 import { RateLimitedException, ServiceUnavailableException } from "@/lib/api-response";
 import type { ClientIp } from "@/lib/rate-limit/client-ip";
@@ -213,13 +213,13 @@ describe("account enumeration: refusals are identical whether or not the account
 describe("failure handling", () => {
   it("succeeded() never throws, even if the store fails after a correct password", async () => {
     const real = new MemoryStore();
-    const flaky: CounterStore = { ...real, hit: (k, w) => real.hit(k, w), hasFlag: (k) => real.hasFlag(k), decrFloor: () => Promise.reject(new Error("x")), del: () => Promise.reject(new Error("x")), setFlag: () => Promise.reject(new Error("x")) };
+    const flaky: CounterStore = { hit: (k, w, m) => real.hit(k, w, m), hasFlag: (k) => real.hasFlag(k), refund: () => Promise.reject(new Error("x")), reset: () => Promise.reject(new Error("x")), setFlag: () => Promise.reject(new Error("x")) };
     const limiter = new RateLimiter({ store: flaky, policy: DEFAULT_POLICY, secret: SECRET });
     const attempt = await limiter.beginLogin(ipOf("198.51.100.9"), "a@example.test");
     await expect(attempt.succeeded()).resolves.toBeUndefined();
   });
   it("deny mode surfaces a 503 from the limiter (fail closed), memory mode keeps limiting", async () => {
-    const down: CounterStore = { hit: () => Promise.reject(new Error("d")), decrFloor: () => Promise.reject(new Error("d")), del: () => Promise.reject(new Error("d")), setFlag: () => Promise.reject(new Error("d")), hasFlag: () => Promise.reject(new Error("d")) };
+    const down: CounterStore = { hit: () => Promise.reject(new Error("d")), refund: () => Promise.reject(new Error("d")), reset: () => Promise.reject(new Error("d")), setFlag: () => Promise.reject(new Error("d")), hasFlag: () => Promise.reject(new Error("d")) };
     const deny = new RateLimiter({ store: new ResilientStore({ primary: down, fallback: new MemoryStore(), onFailure: "deny" }), policy: DEFAULT_POLICY, secret: SECRET });
     expect(await reason(deny.enforceIp("signup", ipOf("203.0.113.9")))).toBeInstanceOf(ServiceUnavailableException);
     const mem = new RateLimiter({ store: new ResilientStore({ primary: down, fallback: new MemoryStore(), onFailure: "memory" }), policy: DEFAULT_POLICY, secret: SECRET });
@@ -230,5 +230,94 @@ describe("failure handling", () => {
     const { limiter, blocked } = setup();
     for (let i = 0; i < DEFAULT_POLICY.signup.ip.max + 1; i++) await reason(limiter.enforceIp("signup", ipOf("203.0.113.10")));
     expect(blocked).toEqual([{ endpoint: "signup", scope: "ip" }]);
+  });
+});
+
+
+describe("shared addresses (CGNAT, office, campus): the per-IP login ceiling counts FAILURES, not logins", () => {
+  const attempt = async (limiter: RateLimiter, ip: ClientIp, email: string) => { await limiter.enforceIp("login", ip); return limiter.beginLogin(ip, email); };
+  it("REGRESSION: hundreds of different people logging in successfully from one shared address are never throttled (old design: 30 per 15 min, shared)", async () => {
+    const { limiter } = setup();
+    const shared = ipOf("100.64.0.1");
+    for (let i = 0; i < DEFAULT_POLICY.login.ip.max * 8; i++) {
+      const a = await attempt(limiter, shared, `person${i}@example.test`);
+      await a.succeeded();
+    }
+  });
+  it("one person mistyping on the shared address is limited per ACCOUNT, so the neighbours are unaffected", async () => {
+    const { limiter } = setup();
+    const shared = ipOf("100.64.0.2");
+    for (let i = 0; i < DEFAULT_POLICY.login.accountIp.max; i++) await attempt(limiter, shared, "clumsy@example.test");
+    expect(await reason(attempt(limiter, shared, "clumsy@example.test"))).toBeInstanceOf(RateLimitedException);
+    await expect(attempt(limiter, shared, "neighbour@example.test")).resolves.toBeDefined();
+  });
+  it("credential stuffing from one address is still stopped: `ip.max` FAILED attempts across many accounts exhaust it, interleaved successes do not rescue it", async () => {
+    const { limiter } = setup();
+    const bot = ipOf("203.0.113.200");
+    let failures = 0;
+    for (let i = 0; i < DEFAULT_POLICY.login.ip.max; i++) {
+      const a = await attempt(limiter, bot, `victim${i}@example.test`); failures++;
+      if (i % 10 === 0) { // the bot also owns one real account and logs in with it now and then
+        await a.succeeded(); failures--;
+        const b = await attempt(limiter, bot, "bots-own@example.test"); await b.succeeded();
+      }
+    }
+    // Successes were refunded, failures were not: the remaining headroom is exactly the number of successes that were refunded.
+    let extra = 0;
+    for (let i = 0; i < DEFAULT_POLICY.login.ip.max; i++) { try { await attempt(limiter, bot, `more${i}@example.test`); extra++; } catch { break; } }
+    expect(failures + extra).toBe(DEFAULT_POLICY.login.ip.max);
+    expect(await reason(attempt(limiter, bot, "one-more@example.test"))).toBeInstanceOf(RateLimitedException);
+  });
+  it("the shared 'unknown client' bucket is capped at MAX_EFFECTIVE_LIMIT however it is configured (bounded memory)", async () => {
+    const policy: RateLimitPolicy = { ...DEFAULT_POLICY, signup: { ...DEFAULT_POLICY.signup, ip: { max: 10_000, windowSeconds: 3_600 } }, unknownIpMultiplier: 1_000 };
+    const { limiter } = setup(policy);
+    let admitted = 0;
+    for (let i = 0; i < MAX_EFFECTIVE_LIMIT + 5; i++) { try { await limiter.enforceIp("signup", UNKNOWN); admitted++; } catch { break; } }
+    expect(admitted).toBe(MAX_EFFECTIVE_LIMIT);
+  });
+});
+
+describe("AI execution limit per workspace (cost control)", () => {
+  const W = DEFAULT_POLICY.aiExecution.workspace;
+  it("admits `max`, then refuses with a Retry-After inside the window; workspaces are independent", async () => {
+    const { limiter } = setup();
+    for (let i = 0; i < W.max; i++) expect((await limiter.checkWorkspaceAi("ws_a")).allowed).toBe(true);
+    const r = await limiter.checkWorkspaceAi("ws_a");
+    expect(r).toMatchObject({ allowed: false, limit: W.max, remaining: 0 });
+    expect(r.retryAfterSeconds).toBeGreaterThan(0); expect(r.retryAfterSeconds).toBeLessThanOrEqual(W.windowSeconds);
+    expect((await limiter.checkWorkspaceAi("ws_b")).allowed).toBe(true);
+  });
+  it("reports remaining and honours an explicit per-call maximum", async () => {
+    const { limiter } = setup();
+    expect(await limiter.checkWorkspaceAi("ws_c", 3)).toMatchObject({ allowed: true, limit: 3, remaining: 2 });
+    await limiter.checkWorkspaceAi("ws_c", 3); await limiter.checkWorkspaceAi("ws_c", 3);
+    expect((await limiter.checkWorkspaceAi("ws_c", 3)).allowed).toBe(false);
+  });
+  it("REGRESSION (2x burst): 1 request at the start of the window + the rest at its end + a burst just after it still admits at most `max` in any 60 s", async () => {
+    const { limiter, advance } = setup();
+    expect((await limiter.checkWorkspaceAi("ws_d")).allowed).toBe(true);
+    advance(W.windowSeconds * 1_000 - 1);
+    let n = 0; for (let i = 0; i < 2 * W.max; i++) if ((await limiter.checkWorkspaceAi("ws_d")).allowed) n++;
+    advance(2);
+    let m = 0; for (let i = 0; i < 2 * W.max; i++) if ((await limiter.checkWorkspaceAi("ws_d")).allowed) m++;
+    expect(1 + n + m).toBe(W.max + 1); // the first request left the window at +60 s, freeing exactly one slot
+  });
+  it("concurrency: exactly `max` of 100 parallel executions are admitted", async () => {
+    const { limiter } = setup();
+    const out = await Promise.all(Array.from({ length: 100 }, () => limiter.checkWorkspaceAi("ws_e")));
+    expect(out.filter((r) => r.allowed)).toHaveLength(W.max);
+  });
+  it("fail-safe: Redis down + memory mode still enforces the limit; deny mode refuses with 503; it is never unlimited", async () => {
+    const down: CounterStore = { hit: () => Promise.reject(new Error("d")), refund: () => Promise.reject(new Error("d")), reset: () => Promise.reject(new Error("d")), setFlag: () => Promise.reject(new Error("d")), hasFlag: () => Promise.reject(new Error("d")) };
+    const mem = new RateLimiter({ store: new ResilientStore({ primary: down, fallback: new MemoryStore(), onFailure: "memory" }), policy: DEFAULT_POLICY, secret: SECRET });
+    const seen: boolean[] = []; for (let i = 0; i < W.max + 3; i++) seen.push((await mem.checkWorkspaceAi("ws_f")).allowed);
+    expect(seen.filter(Boolean)).toHaveLength(W.max);
+    const deny = new RateLimiter({ store: new ResilientStore({ primary: down, fallback: new MemoryStore(), onFailure: "deny" }), policy: DEFAULT_POLICY, secret: SECRET });
+    expect(await reason(deny.checkWorkspaceAi("ws_f"))).toBeInstanceOf(ServiceUnavailableException);
+  });
+  it("onBlocked reports the endpoint and scope only (never the workspace id)", async () => {
+    const { limiter, blocked } = setup();
+    for (let i = 0; i < W.max + 1; i++) await limiter.checkWorkspaceAi("ws_secret_id");
+    expect(blocked).toEqual([{ endpoint: "aiExecution", scope: "workspace" }]);
   });
 });
