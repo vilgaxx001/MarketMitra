@@ -15,6 +15,11 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: "4mb", // accommodates logo uploads handled via Server Actions
     },
+    // Next.js buffers the body of every request that passes middleware (all /api routes except webhooks) and keeps only the
+    // first 10 MiB by default, truncating silently. 4 MiB matches the Server Actions limit above and is larger than any JSON
+    // route's own cap (src/lib/bounded-json.ts BODY_LIMITS, AI execute 1 MiB), so legitimate requests are unaffected while the
+    // framework's buffering of an oversized body is bounded. The per-route limits, not this, decide what is accepted.
+    middlewareClientMaxBodySize: "4mb",
   },
 
   images: {

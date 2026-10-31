@@ -96,7 +96,7 @@ beforeEach(() => {
   rec = new Recorder(); __setTestProviderOverride("openai", rec);
   table = []; seq = 0;
   Object.values(log).forEach((f) => f.mockReset());
-  vi.mocked(checkAIExecutionRateLimit).mockReset().mockResolvedValue({ allowed: true, configured: false });
+  vi.mocked(checkAIExecutionRateLimit).mockReset().mockResolvedValue({ allowed: true });
   vi.mocked(requireBusinessAccess).mockReset().mockImplementation((async (wu: WorkspaceUser, businessId: string) => {
     if (MEMBERSHIP[businessId] !== wu.workspaceId) throw new ApiException("NOT_FOUND", "Business not found.");
     return {};
@@ -448,7 +448,7 @@ describe("12. retrieval failure policy", () => {
     expect(rec.calls).toHaveLength(0);
   });
   it("rate limiting still precedes memory retrieval", async () => {
-    vi.mocked(checkAIExecutionRateLimit).mockResolvedValue({ allowed: false, configured: true } as never);
+    vi.mocked(checkAIExecutionRateLimit).mockResolvedValue({ allowed: false } as never);
     await expect(executeAICoreRequest(req(), userWs1)).rejects.toMatchObject({ code: "RATE_LIMIT_EXCEEDED_INTERNAL" });
     expect(retrievalRepo.findRetrievalCandidates).not.toHaveBeenCalled();
   });

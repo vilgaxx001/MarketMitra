@@ -60,7 +60,7 @@ beforeEach(() => {
   openai = new Recorder("openai"); anthropic = new Recorder("anthropic"); gemini = new Recorder("gemini");
   __setTestProviderOverride("openai", openai); __setTestProviderOverride("anthropic", anthropic); __setTestProviderOverride("gemini", gemini);
   Object.values(log).forEach((f) => f.mockReset());
-  vi.mocked(checkAIExecutionRateLimit).mockReset().mockResolvedValue({ allowed: true, configured: false });
+  vi.mocked(checkAIExecutionRateLimit).mockReset().mockResolvedValue({ allowed: true });
   vi.mocked(requireBusinessAccess).mockReset().mockResolvedValue({} as never);
   vi.mocked(resolveBusinessContext).mockReset().mockResolvedValue({ business: { preferredLanguage: null }, brand: null } as never);
   vi.mocked(resolveEffectiveAIPreferences).mockReset().mockResolvedValue(ok);

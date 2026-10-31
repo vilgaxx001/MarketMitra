@@ -28,7 +28,8 @@ function toApiError(err: AICoreError) {
   switch (err.code) {
     case "INVALID_REQUEST": return apiError("VALIDATION_ERROR", "The request was invalid.", { code: err.code });
     case "SAFETY_REFUSAL": return apiError("VALIDATION_ERROR", "This request was declined on safety grounds.", { code: err.code });
-    case "RATE_LIMIT_EXCEEDED_INTERNAL": return apiError("RATE_LIMITED", "Too many AI requests for this workspace. Please try again shortly.", { code: err.code });
+    case "RATE_LIMIT_EXCEEDED_INTERNAL": return apiError("RATE_LIMITED", "Too many AI requests for this workspace. Please try again shortly.", { code: err.code }, { headers: { "Retry-After": String(Math.max(1, err.details.retryAfterSeconds ?? 1)) } });
+    case "RATE_LIMITER_UNAVAILABLE": return apiError("SERVICE_UNAVAILABLE", "AI generation is temporarily paused. Please try again shortly.", { code: err.code }, { headers: { "Retry-After": String(Math.max(1, err.details.retryAfterSeconds ?? 5)) } });
     case "NO_COMPATIBLE_MODEL": case "ALL_CANDIDATES_EXHAUSTED": case "PROVIDER_UNAVAILABLE": case "MODEL_UNAVAILABLE":
       return apiError("PROVIDER_ERROR", "AI generation is temporarily unavailable. Please try again shortly.", { code: err.code });
     case "CONTEXT_LIMIT_EXCEEDED": return apiError("VALIDATION_ERROR", "The request is too long for the available models.", { code: err.code });

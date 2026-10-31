@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.mocked(requireBusinessAccess).mockReset().mockResolvedValue({} as never);
   vi.mocked(resolveBusinessContext).mockReset().mockResolvedValue({ business: { preferredLanguage: null }, brand: null } as never);
   vi.mocked(resolveEffectiveAIPreferences).mockReset().mockResolvedValue(prefs);
-  vi.mocked(checkAIExecutionRateLimit).mockReset().mockResolvedValue({ allowed: true, configured: false });
+  vi.mocked(checkAIExecutionRateLimit).mockReset().mockResolvedValue({ allowed: true });
 });
 afterEach(() => { __clearTestProviderOverrides(); });
 

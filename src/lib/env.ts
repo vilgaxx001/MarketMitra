@@ -22,6 +22,7 @@
  */
 
 import { z } from "zod";
+import { parsePolicy } from "@/lib/rate-limit/policy";
 
 /* -------------------------------------------------------------------------
  * Schema
@@ -99,6 +100,37 @@ const envSchema = z.object({
 
   /* ---------- Rate limiting / caching ---------- */
   REDIS_URL: z.string().optional(),
+  /**
+   * Which client-IP information the rate limiter may trust (src/lib/rate-limit/client-ip.ts). Default: none - x-forwarded-for
+   * is ignored and every client shares one flood-ceiling bucket. Set exactly the one that matches the deployment:
+   *   TRUSTED_IP_HEADER   name of a header the edge overwrites with the client IP (e.g. cf-connecting-ip, x-real-ip), or
+   *   TRUSTED_PROXY_HOPS  number of reverse proxies that append to x-forwarded-for.
+   * Setting either when the app is directly reachable by clients lets them choose their own rate-limit identity.
+   */
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+  TRUSTED_IP_HEADER: z
+    .string()
+    .transform((v) => v.trim().toLowerCase() || undefined)
+    .pipe(z.string().regex(/^[a-z0-9-]{1,64}$/, "must be a plain header name such as cf-connecting-ip").optional())
+    .optional(),
+  /** Optional JSON override of the rate-limit thresholds (strict, validated; see src/lib/rate-limit/policy.ts and docs/RATE_LIMITING.md). */
+  RATE_LIMIT_POLICY_JSON: z
+    .string()
+    .optional()
+    .superRefine((v, ctx) => {
+      const r = parsePolicy(v);
+      if (!r.ok) ctx.addIssue({ code: "custom", message: r.error });
+    }),
+  /** What the limiter does when Redis is unavailable: keep enforcing in-process ("memory", default) or refuse with 503 ("deny"). Never "allow". */
+  RATE_LIMIT_ON_STORE_FAILURE: z.enum(["memory", "deny"]).default("memory"),
+  /**
+   * Production refuses to start without a trusted client-IP source (TRUSTED_IP_HEADER or TRUSTED_PROXY_HOPS) and without
+   * REDIS_URL, because either gap silently weakens every limit. A deployment that really has neither (a single instance
+   * directly on the internet, say) must say so explicitly with these acknowledgements; they change nothing else. Strings, not
+   * booleans: z.coerce.boolean() would read "false" as true.
+   */
+  RATE_LIMIT_ALLOW_UNTRUSTED_CLIENT_IP: z.enum(["true", "false"]).default("false"),
+  RATE_LIMIT_ALLOW_MEMORY_STORE: z.enum(["true", "false"]).default("false"),
 
   /* ---------- Monitoring / Logging ---------- */
   SENTRY_DSN: z.string().optional(),
@@ -137,6 +169,21 @@ function validateConditionalRequirements(parsed: Env, rawEnv: NodeJS.ProcessEnv)
     );
   }
 
+  // Client-IP trust configuration must be unambiguous: it decides who a request "is" for every rate limit.
+  if (parsed.TRUSTED_IP_HEADER && parsed.TRUSTED_PROXY_HOPS > 0) {
+    problems.push(
+      "TRUSTED_IP_HEADER and TRUSTED_PROXY_HOPS are both set. Set exactly one: the header takes precedence and the hop count would be silently ignored."
+    );
+  }
+  if (parsed.TRUSTED_IP_HEADER && ["x-forwarded-for", "forwarded"].includes(parsed.TRUSTED_IP_HEADER)) {
+    problems.push(
+      `TRUSTED_IP_HEADER=${parsed.TRUSTED_IP_HEADER} is a list header that clients can prepend to. Use TRUSTED_PROXY_HOPS (counted from the right) for x-forwarded-for, or a single-IP header your edge overwrites.`
+    );
+  }
+  if (rawEnv.REDIS_URL && !/^rediss?:\/\//i.test(rawEnv.REDIS_URL)) {
+    problems.push("REDIS_URL must start with redis:// or rediss://.");
+  }
+
   // AI provider cross-check — only the *selected default* provider's key is
   // strictly required at boot; other provider keys are optional and are
   // validated lazily by the provider factory when a workspace selects them.
@@ -172,6 +219,36 @@ function validateConditionalRequirements(parsed: Env, rawEnv: NodeJS.ProcessEnv)
       // eslint-disable-next-line no-console
       console.warn(
         "[env] WARNING: Running in production with no Razorpay or Stripe keys configured. Billing endpoints will reject all checkout attempts until configured."
+      );
+    }
+    if (!parsed.TRUSTED_IP_HEADER && parsed.TRUSTED_PROXY_HOPS === 0) {
+      if (parsed.RATE_LIMIT_ALLOW_UNTRUSTED_CLIENT_IP === "true") {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[env] WARNING: RATE_LIMIT_ALLOW_UNTRUSTED_CLIENT_IP=true: no trusted client-IP source is configured, so all requests to an endpoint share one flood-ceiling bucket and per-IP limits cannot tell clients apart. See docs/RATE_LIMITING.md."
+        );
+      } else {
+        problems.push(
+          "Neither TRUSTED_IP_HEADER nor TRUSTED_PROXY_HOPS is set. Without one of them every client looks the same to the rate limiter (one shared bucket) and per-client limits do nothing. Set TRUSTED_IP_HEADER (a header your edge overwrites, e.g. cf-connecting-ip) or TRUSTED_PROXY_HOPS (number of proxies appending to x-forwarded-for); only if the app is deliberately reachable with no proxy, set RATE_LIMIT_ALLOW_UNTRUSTED_CLIENT_IP=true. See docs/RATE_LIMITING.md."
+        );
+      }
+    }
+    if (!rawEnv.REDIS_URL) {
+      if (parsed.RATE_LIMIT_ALLOW_MEMORY_STORE === "true") {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[env] WARNING: RATE_LIMIT_ALLOW_MEMORY_STORE=true: rate limits (including the AI cost limit) are per instance and reset on restart. With more than one instance an attacker gets that many times the limit."
+        );
+      } else {
+        problems.push(
+          "REDIS_URL is not set. Rate limits would be per instance and reset on every restart (k instances = k times the limit, including the AI cost limit). Set REDIS_URL; only for a deliberate single-instance deployment, set RATE_LIMIT_ALLOW_MEMORY_STORE=true. See docs/RATE_LIMITING.md."
+        );
+      }
+    }
+    if (!rawEnv.CONTACT_INBOX_EMAIL) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[env] WARNING: CONTACT_INBOX_EMAIL not set in production. Contact-form submissions are accepted but nothing stores or delivers them (personal data is deliberately not logged). Set it before launch."
       );
     }
     if (!rawEnv.SENTRY_DSN) {
