@@ -75,10 +75,18 @@ const PASSWORD = "Verify1234Pass";
 const run = Date.now().toString(36);
 const email = (l) => `http-verify-${l}-${run}@example.test`;
 
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+// Signup is account-enumeration safe: the server answers 202 with NO session and creates the account AFTER the response. A real
+// user then signs in; this helper does the same: POST signup, wait for the row to exist, log in once. `r` is the SIGNUP response,
+// `signupCookies` how many cookies it set (must be 0), `login` the sign-in response.
 async function signup(label) {
   const c = new Client(label);
   const r = await c.call("POST", "/api/v1/auth/signup", { name: `User ${label}`, email: email(label), password: PASSWORD, confirmPassword: PASSWORD, acceptTerms: true });
-  return { c, r };
+  const signupCookies = c.cookies.size;
+  let exists = false;
+  for (let i = 0; i < 120 && !exists; i++) { exists = (await sql.query(`select 1 from users where email=$1`, [email(label)])).rowCount > 0; if (!exists) await sleep(150); }
+  const login = exists ? await c.call("POST", "/api/v1/auth/login", { email: email(label), password: PASSWORD }) : null;
+  return { c, r, signupCookies, exists, login };
 }
 
 try {
@@ -98,11 +106,20 @@ try {
   }
 
   const A = await signup("a"), B = await signup("b"), M = await signup("m"), C = await signup("c");
-  check("signup (A) -> 201 and a session cookie is set", A.r.status === 201 && A.c.cookies.size > 0, `${A.r.status} ${A.r.text}`);
+  check("signup (A) -> 202 'check your email' with NO session cookie and no user object in the response", A.r.status === 202 && A.signupCookies === 0 && !/"user"|"id"|emailVerified/.test(A.r.text), `${A.r.status} cookies=${A.signupCookies} ${A.r.text}`);
+  check("the account is created after the response and the new user can sign in (200 + session cookie)", A.exists && A.login?.status === 200 && A.c.cookies.size > 0, `${A.login?.status} ${A.login?.text}`);
   check("signup response does not expose the password or its hash", !/passwordHash|Verify1234Pass/.test(A.r.text), A.r.text);
-  const dup = await new Client("dup").call("POST", "/api/v1/auth/signup", { name: "User a", email: email("a"), password: PASSWORD, confirmPassword: PASSWORD, acceptTerms: true });
-  check("duplicate email signup is rejected (4xx, not 500)", dup.status >= 400 && dup.status < 500, `${dup.status} ${dup.text}`);
-  const stored = (await sql.query(`select "passwordHash" h from users where email=$1`, [email("a")])).rows[0]?.h ?? "";
+  const storedBefore = (await sql.query(`select id, "passwordHash" h from users where email=$1`, [email("a")])).rows[0];
+  const dupClient = new Client("dup");
+  const dup = await dupClient.call("POST", "/api/v1/auth/signup", { name: "Mallory", email: email("a"), password: "Other1234Pass", confirmPassword: "Other1234Pass", acceptTerms: true });
+  check("ENUMERATION: signing up with an EXISTING address returns the same status, byte-identical body and no cookie as a new address", dup.status === A.r.status && dup.text === A.r.text && dupClient.cookies.size === 0 && !(dup.headers.getSetCookie?.() ?? []).length, `${dup.status} ${dup.text} | ${A.r.status} ${A.r.text}`);
+  check("ENUMERATION: the two responses carry the same headers (apart from per-request ones)", ["content-type", "cache-control"].every((h) => dup.headers.get(h) === A.r.headers.get(h)), `${dup.headers.get("cache-control")} vs ${A.r.headers.get("cache-control")}`);
+  await sleep(2_500); // the deferred work (hash + lookup + notice) has had time to run
+  const afterDup = (await sql.query(`select id, "passwordHash" h, (select count(*) from users where email=$1) n from users where email=$1`, [email("a")])).rows[0];
+  check("an existing account is untouched by a signup attempt: still ONE row, same id, same password hash (no takeover, no duplicate)", afterDup?.n === "1" && afterDup.id === storedBefore.id && afterDup.h === storedBefore.h, JSON.stringify({ n: afterDup?.n }));
+  const wrongPw = await new Client("dup2").call("POST", "/api/v1/auth/login", { email: email("a"), password: "Other1234Pass" });
+  check("the attacker's password does NOT work on the existing account", wrongPw.status === 401, `${wrongPw.status}`);
+  const stored = storedBefore.h ?? "";
   check("password is stored hashed (not the plaintext)", stored.length > 20 && !stored.includes(PASSWORD), stored.slice(0, 7) + "…");
 
   r = await A.c.call("GET", "/api/v1/auth/me");
@@ -135,7 +152,7 @@ try {
   check("a LIVE session on /login is still redirected away to /dashboard (existing behaviour preserved)", chain.hops[0] === "/login:307" && chain.hops[1]?.startsWith("/dashboard"), chain.hops.join(" -> "));
   r = await A.c.call("GET", "/pricing", undefined, { redirect: "manual" });
   check("a signed-in visitor still sees the marketing pricing page (200)", r.status === 200, r.status);
-  const pw = new Client("pwreset"); await pw.call("POST", "/api/v1/auth/signup", { name: "Pw", email: email("pw"), password: PASSWORD, confirmPassword: PASSWORD, acceptTerms: true });
+  const PWU = await signup("pw"); const pw = PWU.c;
   const pwToken = new Map(pw.cookies); const pwUser = (await sql.query(`select id from users where email=$1`, [email("pw")])).rows[0].id;
   await sql.query(`delete from sessions where "userId"=$1`, [pwUser]); // what a password change / reset does server-side (repo.deleteAllUserSessions)
   const pwCopy = new Client("pwcopy"); pwCopy.cookies = pwToken; r = await pwCopy.call("GET", "/api/v1/auth/me");
@@ -392,14 +409,14 @@ try {
 
   if (redis) {
     section("Rate limiting through the real HTTP path (real Redis)");
-    const key = `ai:ratelimit:${ws}`; const ttl = await redis.ttl(key), cnt = Number(await redis.get(key));
-    check("counter key exists in Redis with a bounded TTL after the execute calls", cnt >= 1 && ttl > 0 && ttl <= 60, `count=${cnt} ttl=${ttl}`);
+    const key = `rl:v1:ai:ws:${ws}`; const ttl = await redis.pttl(key), cnt = await redis.zcard(key), kind = await redis.type(key);
+    check("the AI counter exists in Redis as a sliding-window log (zset) with a bounded TTL after the execute calls", kind === "zset" && cnt >= 1 && ttl > 0 && ttl <= 60_000, `type=${kind} entries=${cnt} pttl=${ttl}`);
     await redis.del(key);
     const statuses = []; for (let i = 0; i < 24; i++) statuses.push((await exec(A.c)).status);
     const limited = statuses.filter((s) => s === 429).length, passed = statuses.filter((s) => s === 502).length;
     console.log(`   24 sequential calls: ${passed}x502 ${limited}x429 other=${statuses.filter((s) => s !== 502 && s !== 429).join(",")}`);
     check("exactly 20 calls pass the limiter per window, the rest -> 429 RATE_LIMITED", passed === 20 && limited === 4, JSON.stringify(statuses));
-    r = await exec(A.c); check("429 body is the standard envelope", r.status === 429 && code(r) === "RATE_LIMITED", `${r.status} ${r.text}`);
+    r = await exec(A.c); check("429 body is the standard envelope with an integer Retry-After inside the 60 s window", r.status === 429 && code(r) === "RATE_LIMITED" && Number.isInteger(Number(r.headers.get("retry-after"))) && Number(r.headers.get("retry-after")) >= 1 && Number(r.headers.get("retry-after")) <= 60, `${r.status} retry-after=${r.headers.get("retry-after")} ${r.text}`);
     r = await exec(B.c, WB.slug); check("another workspace is not limited by Alpha's window", r.status === 502, `${r.status} ${r.text.slice(0, 120)}`);
   }
 
@@ -415,8 +432,8 @@ try {
 
     // --- per-IP limit: decided before validation, immune to a forged x-forwarded-for
     const st = [];
-    for (let i = 0; i < 31; i++) st.push((await fresh().call("POST", LOGIN, {}, at(ipN(11), { "x-forwarded-for": `9.9.9.${i}` }))).status);
-    check("login per-IP limit: requests 1-30 pass the limiter ({} -> 400), the 31st -> 429, although each request forged a different x-forwarded-for", st.slice(0, 30).every((x) => x === 400) && st[30] === 429, st.join(","));
+    for (let i = 0; i < 61; i++) st.push((await fresh().call("POST", LOGIN, {}, at(ipN(11), { "x-forwarded-for": `9.9.9.${i}` }))).status);
+    check("login per-IP limit (failed attempts): requests 1-60 pass the limiter ({} -> 400), the 61st -> 429, although each request forged a different x-forwarded-for", st.slice(0, 60).every((x) => x === 400) && st[60] === 429, st.join(","));
     r = await fresh().call("POST", LOGIN, {}, at(ipN(11)));
     const retry = Number(r.headers.get("retry-after"));
     check("429 contract: RATE_LIMITED envelope, integer Retry-After within the 15-minute window, Cache-Control no-store, nothing about accounts", r.status === 429 && code(r) === "RATE_LIMITED" && Number.isInteger(retry) && retry >= 1 && retry <= 900 && /no-store/.test(r.headers.get("cache-control") ?? "") && !/account|password|e-?mail/i.test(r.json?.error?.message ?? ""), `${r.status} retry-after=${r.headers.get("retry-after")} ${r.text}`);
@@ -425,7 +442,7 @@ try {
 
     // --- per account + IP: brute-force control that cannot be turned into a lockout of the owner
     const V = await signup("rl-victim");
-    check("victim account created for the lockout checks", V.r.status === 201, `${V.r.status} ${V.r.text}`);
+    check("victim account created for the lockout checks", V.r.status === 202 && V.exists && V.login?.status === 200, `${V.r.status} ${V.r.text} login=${V.login?.status}`);
     const bad = (em, ip) => fresh().call("POST", LOGIN, { email: em, password: "Wrong1234Pass" }, at(ip));
     const good = (ip, extra) => fresh().call("POST", LOGIN, { email: email("rl-victim"), password: PASSWORD }, at(ip, extra));
     let seq = []; for (let i = 0; i < 6; i++) seq.push((await bad(email("rl-victim"), ipN(21))).status);
@@ -445,8 +462,17 @@ try {
     const sessRow = await sql.query(`select s."ipAddress" as ip from sessions s join users u on u.id = s."userId" where u.email = $1 order by s."createdAt" desc limit 1`, [email("rl-victim")]);
     check("the session records the trusted address (x-real-ip), never the client's own x-forwarded-for", r.status === 200 && sessRow.rows[0]?.ip === ipN(25), `${r.status} stored=${sessRow.rows[0]?.ip}`);
 
+    // --- shared addresses (CGNAT / office): successful logins do not consume the per-IP flood budget
+    {
+      const shared = ipN(60); const outcomes = [];
+      for (let i = 0; i < 65; i++) outcomes.push((await fresh().call("POST", LOGIN, { email: email("rl-victim"), password: PASSWORD }, at(shared))).status);
+      check("shared address: 65 SUCCESSFUL logins from one IP (limit 60 failures) are all accepted - the flood counter counts failures only", outcomes.every((x) => x === 200), [...new Set(outcomes)].join(","));
+      const failed = []; for (let i = 0; i < 61; i++) failed.push((await fresh().call("POST", LOGIN, { email: email(`rl-stuff-${i}`), password: "Wrong1234Pass" }, at(shared))).status);
+      check("shared address: after those successes, credential stuffing (61 FAILED logins across different accounts) is still stopped at the 61st with 429", failed.slice(0, 60).every((x) => x === 401) && failed[60] === 429, [...new Set(failed.slice(0, 60))].join(",") + " / " + failed[60]);
+    }
+
     // --- every other public endpoint, per IP (counted before validation)
-    for (const [pth, n, max] of [["/api/v1/auth/signup", 53, 5], ["/api/v1/auth/forgot-password", 54, 5], ["/api/v1/auth/reset-password", 55, 10], ["/api/v1/auth/verify-email", 56, 10], ["/api/v1/contact", 57, 5], ["/api/v1/ai/demo-generate", 58, 20]]) {
+    for (const [pth, n, max] of [["/api/v1/auth/signup", 53, 10], ["/api/v1/auth/forgot-password", 54, 10], ["/api/v1/auth/reset-password", 55, 30], ["/api/v1/auth/verify-email", 56, 30], ["/api/v1/contact", 57, 10], ["/api/v1/ai/demo-generate", 58, 20]]) {
       const got = []; for (let i = 0; i <= max; i++) got.push((await fresh().call("POST", pth, {}, at(ipN(n)))).status);
       check(`${pth}: ${max} requests per IP per window reach validation (400), request ${max + 1} -> 429`, got.slice(0, max).every((x) => x === 400) && got[max] === 429, got.join(","));
     }
@@ -456,6 +482,10 @@ try {
       const keys = await redis.keys("rl:v1:*");
       const ttls = await Promise.all(keys.map((k) => redis.pttl(k)));
       check("Redis: rate-limit keys exist and every one has a bounded expiry (none stranded without a TTL)", keys.length > 0 && ttls.every((t) => t > 0 && t <= 30 * 86_400_000), `keys=${keys.length} badTtl=${ttls.filter((t) => !(t > 0 && t <= 30 * 86_400_000)).length}`);
+      const kinds = await Promise.all(keys.map((k) => redis.type(k)));
+      const counters = keys.filter((k, i) => kinds[i] === "zset");
+      const sizes = await Promise.all(counters.map((k) => redis.zcard(k)));
+      check("Redis: counters are sliding-window logs (zset), flags are plain keys, and no counter holds more entries than the largest configured limit", counters.length > 0 && keys.every((k, i) => (k.includes(":known:") ? kinds[i] === "string" : kinds[i] === "zset")) && sizes.every((n) => n <= 600), `types=${[...new Set(kinds)].join(",")} max=${Math.max(0, ...sizes)}`);
       check("Redis: no rate-limit key contains an e-mail address", !keys.some((k) => /@|http-verify|example\.test/i.test(k)), keys.filter((k) => /@|http-verify|example\.test/i.test(k)).slice(0, 2).join(","));
     }
 
