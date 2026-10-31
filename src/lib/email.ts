@@ -19,6 +19,7 @@
  * boundary referenced in the architecture decision log.
  */
 
+import { createHmac } from "node:crypto";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
@@ -31,6 +32,47 @@ export interface EmailPayload {
   subject: string;
   html: string;
   text?: string;
+}
+
+/* -------------------------------------------------------------------------
+ * Untrusted text
+ *
+ * Everything a user can type (display name, workspace name, contact message...) reaches an e-mail that somebody else reads
+ * in an HTML client. Interpolating it raw lets the author inject markup, links and look-alike "verify your account" blocks
+ * into a genuine MarketMitra message (and, via the team-invite template, into mail sent to a THIRD PARTY). So every
+ * dynamic value is passed through escapeHtml() at the point it enters a template; the text/plain alternative needs no
+ * escaping. Header-bound text (subject) additionally loses CR/LF/control characters.
+ * ---------------------------------------------------------------------- */
+
+const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" };
+
+/** Escapes text for use in HTML element content AND double- or single-quoted attribute values. */
+export function escapeHtml(value: string): string {
+  return value.replace(/[&<>"'`]/g, (c) => HTML_ESCAPES[c]!);
+}
+
+/** Escapes text and keeps line breaks (for multi-line user messages rendered inside a <p>). */
+export function escapeHtmlWithBreaks(value: string): string {
+  return escapeHtml(value).replace(/\r\n|\r|\n/g, "<br>");
+}
+
+/** A header-safe single line: no CR/LF or other control characters, collapsed whitespace, bounded length. */
+export function sanitizeHeaderText(value: string, maxLength = 200): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+/**
+ * A link target for an href: only absolute http(s) URLs are allowed, anything else becomes "#". The templates are fed URLs the
+ * server builds, so this is defence in depth against a future caller passing a user-influenced value (javascript:, data:).
+ */
+function safeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || u.protocol === "http:" ? escapeHtml(u.toString()) : "#";
+  } catch {
+    return "#";
+  }
 }
 
 /* -------------------------------------------------------------------------
@@ -74,16 +116,16 @@ export const emailTemplates = {
     html: emailWrapper(`
       <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;color:#09090b;letter-spacing:-0.5px">Verify your email</h1>
       <p style="margin:0 0 24px;font-size:15px;color:#52525b;line-height:1.7">
-        Hi ${params.name}, welcome to MarketMitra! Click the button below to verify your email address and activate your account.
+        Hi ${escapeHtml(params.name)}, welcome to MarketMitra! Click the button below to verify your email address and activate your account.
       </p>
-      <a href="${params.verificationUrl}" style="display:inline-block;background:linear-gradient(135deg,#2563EB,#1e40af);color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:600;letter-spacing:-0.2px">
+      <a href="${safeUrl(params.verificationUrl)}" style="display:inline-block;background:linear-gradient(135deg,#2563EB,#1e40af);color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:600;letter-spacing:-0.2px">
         Verify Email Address
       </a>
       <p style="margin:24px 0 0;font-size:13px;color:#71717a;line-height:1.6">
         This link expires in 24 hours. If you didn't create a MarketMitra account, you can safely ignore this email.
       </p>
       <p style="margin:12px 0 0;font-size:12px;color:#a1a1aa">
-        Or copy this link: <span style="color:#2563EB">${params.verificationUrl}</span>
+        Or copy this link: <span style="color:#2563EB">${escapeHtml(params.verificationUrl)}</span>
       </p>
     `),
     text: `Verify your MarketMitra email\n\nHi ${params.name},\n\nClick this link to verify your email:\n${params.verificationUrl}\n\nThis link expires in 24 hours.`,
@@ -95,9 +137,9 @@ export const emailTemplates = {
     html: emailWrapper(`
       <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;color:#09090b;letter-spacing:-0.5px">Reset your password</h1>
       <p style="margin:0 0 24px;font-size:15px;color:#52525b;line-height:1.7">
-        Hi ${params.name}, we received a request to reset your password. Click the button below to set a new one.
+        Hi ${escapeHtml(params.name)}, we received a request to reset your password. Click the button below to set a new one.
       </p>
-      <a href="${params.resetUrl}" style="display:inline-block;background:linear-gradient(135deg,#2563EB,#1e40af);color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:600;letter-spacing:-0.2px">
+      <a href="${safeUrl(params.resetUrl)}" style="display:inline-block;background:linear-gradient(135deg,#2563EB,#1e40af);color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:600;letter-spacing:-0.2px">
         Reset Password
       </a>
       <p style="margin:24px 0 0;font-size:13px;color:#71717a;line-height:1.6">
@@ -115,13 +157,13 @@ export const emailTemplates = {
     inviteUrl: string;
   }): EmailPayload => ({
     to: "",
-    subject: `You're invited to join ${params.workspaceName} on MarketMitra`,
+    subject: sanitizeHeaderText(`You're invited to join ${params.workspaceName} on MarketMitra`),
     html: emailWrapper(`
       <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;color:#09090b;letter-spacing:-0.5px">You're invited!</h1>
       <p style="margin:0 0 24px;font-size:15px;color:#52525b;line-height:1.7">
-        <strong>${params.inviterName}</strong> has invited you to join <strong>${params.workspaceName}</strong> on MarketMitra as a <strong>${params.role}</strong>.
+        <strong>${escapeHtml(params.inviterName)}</strong> has invited you to join <strong>${escapeHtml(params.workspaceName)}</strong> on MarketMitra as a <strong>${escapeHtml(params.role)}</strong>.
       </p>
-      <a href="${params.inviteUrl}" style="display:inline-block;background:linear-gradient(135deg,#2563EB,#1e40af);color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:600;letter-spacing:-0.2px">
+      <a href="${safeUrl(params.inviteUrl)}" style="display:inline-block;background:linear-gradient(135deg,#2563EB,#1e40af);color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:600;letter-spacing:-0.2px">
         Accept Invitation
       </a>
       <p style="margin:24px 0 0;font-size:13px;color:#71717a;line-height:1.6">
@@ -130,21 +172,79 @@ export const emailTemplates = {
     `),
     text: `You're invited to join ${params.workspaceName} on MarketMitra.\n\nAccept here: ${params.inviteUrl}`,
   }),
+  /** Sent INSTEAD of a verification mail when someone signs up with an address that already has an account (see signup route). */
+  signupExistingAccount: (params: { name: string; loginUrl: string; resetUrl: string }): EmailPayload => ({
+    to: "",
+    subject: "You already have a MarketMitra account",
+    html: emailWrapper(`
+      <h1 style="margin:0 0 8px;font-size:24px;font-weight:700;color:#09090b;letter-spacing:-0.5px">You already have an account</h1>
+      <p style="margin:0 0 24px;font-size:15px;color:#52525b;line-height:1.7">
+        Hi ${escapeHtml(params.name)}, someone just tried to create a MarketMitra account with this email address, but you already have one.
+        If that was you, log in instead. If you've forgotten your password, you can reset it.
+      </p>
+      <a href="${safeUrl(params.loginUrl)}" style="display:inline-block;background:linear-gradient(135deg,#2563EB,#1e40af);color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:600;letter-spacing:-0.2px">
+        Log in
+      </a>
+      <p style="margin:24px 0 0;font-size:13px;color:#71717a;line-height:1.6">
+        <a href="${safeUrl(params.resetUrl)}" style="color:#2563EB">Reset your password</a>. If this wasn't you, you can safely ignore this email — nothing has changed on your account.
+      </p>
+    `),
+    text: `You already have a MarketMitra account\n\nHi ${params.name},\n\nSomeone just tried to create an account with this email address, but you already have one.\nLog in: ${params.loginUrl}\nForgot your password? ${params.resetUrl}\n\nIf this wasn't you, you can safely ignore this email.`,
+  }),
+
+  /** Internal notification of a /contact submission. Every submitted field is untrusted. */
+  contactNotification: (params: { name: string; email: string; topic: string; message: string }): EmailPayload => ({
+    to: "",
+    subject: sanitizeHeaderText(`[MarketMitra Contact — ${params.topic}] ${params.name}`),
+    html: `<p><strong>From:</strong> ${escapeHtml(params.name)} (${escapeHtml(params.email)})</p><p><strong>Topic:</strong> ${escapeHtml(params.topic)}</p><p>${escapeHtmlWithBreaks(params.message)}</p>`,
+    text: `From: ${params.name} (${params.email})\nTopic: ${params.topic}\n\n${params.message}`,
+  }),
 };
+/* -------------------------------------------------------------------------
+ * Logging without personal data
+ *
+ * Logs are retained, shipped to third parties and read by people who have no business seeing customers' addresses, so no log
+ * line written here (or by a caller that logs a thrown send error) contains a recipient address. For operations the log
+ * carries what is needed to debug delivery without identifying anyone:
+ *   - recipientDomain: "gmail.com" (deliverability problems cluster by receiving domain);
+ *   - recipientRef: a keyed, truncated hash of the lower-cased address (HMAC-SHA-256 under SESSION_SECRET, 48 bits). The
+ *     same address always yields the same ref, so one user's failures can be correlated and a support agent who is given the
+ *     address can recompute it, but the address cannot be recovered from a log and the ref is useless without the secret;
+ *   - messageId: the provider's id for the message, which is what you look up in the provider dashboard / API to see delivery.
+ * ---------------------------------------------------------------------- */
+
+const EMAIL_PATTERN = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/** Replaces anything that looks like an e-mail address (provider error messages sometimes echo the recipient). */
+export function redactEmailAddresses(text: string): string {
+  return text.replace(EMAIL_PATTERN, "[redacted-email]");
+}
+
+export function recipientLogFields(to: string): { recipientDomain: string; recipientRef: string } {
+  const normalized = to.normalize("NFKC").trim().toLowerCase();
+  const at = normalized.lastIndexOf("@");
+  return {
+    recipientDomain: at >= 0 ? normalized.slice(at + 1).slice(0, 100) : "unknown",
+    recipientRef: createHmac("sha256", env.SESSION_SECRET).update(`email-log\0${normalized}`).digest("hex").slice(0, 12),
+  };
+}
 
 /* -------------------------------------------------------------------------
  * Send function
  * ---------------------------------------------------------------------- */
 
-export async function sendEmail(payload: EmailPayload): Promise<void> {
-  if (env.EMAIL_PROVIDER === "resend") {
-    await sendViaResend(payload);
-  } else {
-    await sendViaSMTP(payload);
-  }
+export interface SendEmailResult {
+  /** The provider's identifier for the accepted message (Resend: data.id, SMTP: messageId). Undefined if the provider returned none. */
+  messageId?: string;
 }
 
-async function sendViaResend(payload: EmailPayload): Promise<void> {
+export async function sendEmail(payload: EmailPayload): Promise<SendEmailResult> {
+  // One choke point: whatever a caller passes, the subject header cannot carry a line break.
+  const safe: EmailPayload = { ...payload, subject: sanitizeHeaderText(payload.subject) };
+  return env.EMAIL_PROVIDER === "resend" ? sendViaResend(safe) : sendViaSMTP(safe);
+}
+
+async function sendViaResend(payload: EmailPayload): Promise<SendEmailResult> {
   if (!env.RESEND_API_KEY) {
     throw new Error("RESEND_API_KEY is not configured. Email cannot be sent. See docs/SETUP.md.");
   }
@@ -152,7 +252,7 @@ async function sendViaResend(payload: EmailPayload): Promise<void> {
   const { Resend } = await import("resend");
   const resend = new Resend(env.RESEND_API_KEY);
 
-  const { error } = await resend.emails.send({
+  const { data, error } = await resend.emails.send({
     from: env.EMAIL_FROM,
     to: payload.to,
     subject: payload.subject,
@@ -160,15 +260,19 @@ async function sendViaResend(payload: EmailPayload): Promise<void> {
     text: payload.text,
   });
 
+  const who = recipientLogFields(payload.to);
   if (error) {
-    logger.error({ msg: "Resend email failed", error, to: payload.to, subject: payload.subject });
-    throw new Error(`Email delivery failed: ${error.message}`);
+    const message = redactEmailAddresses(String(error.message ?? "unknown error"));
+    logger.error({ msg: "Resend email failed", provider: "resend", providerError: { name: error.name, statusCode: error.statusCode, message }, ...who, subject: payload.subject });
+    throw new Error(`Email delivery failed: ${message}`);
   }
 
-  logger.info({ msg: "Email sent via Resend", to: payload.to, subject: payload.subject });
+  const messageId = typeof data?.id === "string" ? data.id : undefined;
+  logger.info({ msg: "Email sent via Resend", provider: "resend", messageId, ...who, subject: payload.subject });
+  return { messageId };
 }
 
-async function sendViaSMTP(payload: EmailPayload): Promise<void> {
+async function sendViaSMTP(payload: EmailPayload): Promise<SendEmailResult> {
   if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASSWORD) {
     throw new Error(
       "SMTP credentials are not configured (SMTP_HOST, SMTP_USER, SMTP_PASSWORD). See docs/SETUP.md."
@@ -193,13 +297,23 @@ async function sendViaSMTP(payload: EmailPayload): Promise<void> {
     auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD },
   });
 
-  await transporter.sendMail({
-    from: env.EMAIL_FROM,
-    to: payload.to,
-    subject: payload.subject,
-    html: payload.html,
-    text: payload.text,
-  });
+  const who = recipientLogFields(payload.to);
+  let info: { messageId?: string };
+  try {
+    info = await transporter.sendMail({
+      from: env.EMAIL_FROM,
+      to: payload.to,
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
+    });
+  } catch (err) {
+    const message = redactEmailAddresses(err instanceof Error ? err.message : String(err));
+    logger.error({ msg: "SMTP email failed", provider: "smtp", ...who, subject: payload.subject, errorMessage: message });
+    throw new Error(`Email delivery failed: ${message}`);
+  }
 
-  logger.info({ msg: "Email sent via SMTP", to: payload.to, subject: payload.subject });
+  const messageId = typeof info.messageId === "string" ? info.messageId : undefined;
+  logger.info({ msg: "Email sent via SMTP", provider: "smtp", messageId, ...who, subject: payload.subject });
+  return { messageId };
 }

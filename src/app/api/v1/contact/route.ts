@@ -1,21 +1,22 @@
 /**
  * src/app/api/v1/contact/route.ts
  *
- * Backs the public /contact form. Real validation, and real delivery
- * once `CONTACT_INBOX_EMAIL` is configured (see src/lib/env.ts) — this
- * reuses the existing `sendEmail()` adapter from Module 1/3
- * (src/lib/email.ts) rather than introducing a second email pathway.
+ * Backs the public /contact form. Real validation, and real delivery to `CONTACT_INBOX_EMAIL` (see src/lib/env.ts) through the
+ * existing `sendEmail()` adapter (src/lib/email.ts).
  *
- * Until `CONTACT_INBOX_EMAIL` is set, submissions are still fully
- * captured via structured logging (`logger.info`) so nothing is lost —
- * they just aren't emailed anywhere yet. This is a genuine, working
- * fallback, not a stub: check server logs / your log aggregator for
- * `msg: "contact_form_submission"` entries.
+ * UNTRUSTED INPUT: name, email, topic and message come from an anonymous caller and end up in an HTML e-mail that staff open.
+ * They are rendered by `emailTemplates.contactNotification`, which HTML-escapes every field (and strips line breaks from the
+ * subject); this route never builds markup itself.
+ *
+ * NO PERSONAL DATA IN LOGS: the submitter's name, address and message are not logged. A log line carries the topic, the message
+ * length and a keyed reference to the sender (see src/lib/email.ts). Consequence, stated plainly: when CONTACT_INBOX_EMAIL is
+ * NOT configured nothing stores the submission, so the route logs a `contact_form_not_delivered` warning for every one (and
+ * src/lib/env.ts warns at boot in production). Configure the inbox before launch.
  */
 import { z } from "zod";
 import { withApiHandler, apiSuccess, apiValidationError } from "@/lib/api-response";
 import { env } from "@/lib/env";
-import { sendEmail } from "@/lib/email";
+import { sendEmail, emailTemplates, recipientLogFields } from "@/lib/email";
 import { logger } from "@/lib/logger";
 import { readBoundedJson, BODY_LIMITS } from "@/lib/bounded-json";
 import { enforceIpLimit, enforceEmailLimit } from "@/lib/rate-limit";
@@ -39,21 +40,13 @@ export const POST = withApiHandler(async (req) => {
   const { name, email, topic, message } = result.data;
   await enforceEmailLimit("contact", email);
 
-  logger.info({
-    msg: "contact_form_submission",
-    name,
-    email,
-    topic,
-    messageLength: message.length,
-  });
+  const sender = recipientLogFields(email);
+  logger.info({ msg: "contact_form_submission", topic, messageLength: message.length, senderRef: sender.recipientRef });
 
   if (env.CONTACT_INBOX_EMAIL) {
-    await sendEmail({
-      to: env.CONTACT_INBOX_EMAIL,
-      subject: `[MarketMitra Contact — ${topic}] ${name}`,
-      html: `<p><strong>From:</strong> ${name} (${email})</p><p><strong>Topic:</strong> ${topic}</p><p>${message.replace(/\n/g, "<br>")}</p>`,
-      text: `From: ${name} (${email})\nTopic: ${topic}\n\n${message}`,
-    });
+    await sendEmail({ ...emailTemplates.contactNotification({ name, email, topic, message }), to: env.CONTACT_INBOX_EMAIL });
+  } else {
+    logger.warn({ msg: "contact_form_not_delivered", reason: "CONTACT_INBOX_EMAIL is not configured; the submission was not stored", topic, senderRef: sender.recipientRef });
   }
 
   return apiSuccess({ received: true });
