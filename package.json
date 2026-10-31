@@ -112,6 +112,7 @@
     "next": {
       "postcss": "8.5.30"
     },
-    "postcss-selector-parser": "7.1.6"
+    "postcss-selector-parser": "7.1.6",
+    "minimatch": "11.0.3"
   }
 }
