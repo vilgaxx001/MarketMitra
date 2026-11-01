@@ -9,7 +9,8 @@
  *
  * WHY AN ADAPTER: swapping providers is a one-line env change, not a
  * codebase change. The rest of the application calls `sendEmail()` and
- * never imports Resend or nodemailer directly.
+ * never imports Resend or nodemailer directly. Both SDKs are declared
+ * dependencies and are loaded lazily, only when their provider is selected.
  *
  * PRODUCTION NOTE:
  * Email sending works ONLY when the required env vars are configured
@@ -238,7 +239,21 @@ export interface SendEmailResult {
   messageId?: string;
 }
 
+/**
+ * Exactly one plain mailbox (`local@domain`). Providers parse `to` differently: an SMTP library reads "a@x.test, b@y.test" or
+ * `"Name" <a@x.test>` as several / decorated recipients, so a value that slipped past upstream validation could copy a message
+ * (a verification link, a reset link) to an extra address. Refused here, before any provider is contacted, and the message never
+ * contains the value.
+ */
+const SINGLE_MAILBOX = /^[^\s,;<>()"\\\[\]:@]+@[^\s,;<>()"\\\[\]:@]+$/;
+export function assertSingleRecipient(to: string): void {
+  if (typeof to !== "string" || to.length > 254 || !SINGLE_MAILBOX.test(to)) {
+    throw new Error("Invalid recipient: expected exactly one plain e-mail address");
+  }
+}
+
 export async function sendEmail(payload: EmailPayload): Promise<SendEmailResult> {
+  assertSingleRecipient(payload.to);
   // One choke point: whatever a caller passes, the subject header cannot carry a line break.
   const safe: EmailPayload = { ...payload, subject: sanitizeHeaderText(payload.subject) };
   return env.EMAIL_PROVIDER === "resend" ? sendViaResend(safe) : sendViaSMTP(safe);
@@ -272,6 +287,32 @@ async function sendViaResend(payload: EmailPayload): Promise<SendEmailResult> {
   return { messageId };
 }
 
+/**
+ * Transport settings for the SMTP provider (exported so the security-relevant ones are asserted by tests, not just read).
+ *  - TLS is REQUIRED unless SMTP_REQUIRE_TLS=false (rejected in production by env.ts): without `requireTLS`, nodemailer only
+ *    upgrades opportunistically, so an attacker who strips STARTTLS from the server greeting would receive the credentials.
+ *    Port 465 uses implicit TLS (`secure`). Certificates are always verified; TLS 1.2 is the floor.
+ *  - Bounded timeouts, so an unresponsive relay cannot hold a request or a deferred job open for minutes.
+ *  - Local files and remote URLs can never become message content, whatever a caller passes.
+ */
+export function smtpTransportOptions() {
+  const port = env.SMTP_PORT ?? 587;
+  const implicitTls = port === 465;
+  return {
+    host: env.SMTP_HOST,
+    port,
+    secure: implicitTls,
+    requireTLS: !implicitTls && env.SMTP_REQUIRE_TLS !== "false",
+    auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+    tls: { minVersion: "TLSv1.2" as const },
+    disableFileAccess: true,
+    disableUrlAccess: true,
+  };
+}
+
 async function sendViaSMTP(payload: EmailPayload): Promise<SendEmailResult> {
   if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASSWORD) {
     throw new Error(
@@ -279,23 +320,8 @@ async function sendViaSMTP(payload: EmailPayload): Promise<SendEmailResult> {
     );
   }
 
-  // nodemailer is not in package.json — add it when SMTP is chosen.
-  // This gives a clear, actionable error rather than a cryptic module-not-found.
-  let nodemailer: typeof import("nodemailer");
-  try {
-    nodemailer = await import("nodemailer");
-  } catch {
-    throw new Error(
-      'SMTP provider requires nodemailer: run `npm install nodemailer @types/nodemailer`'
-    );
-  }
-
-  const transporter = nodemailer.createTransport({
-    host: env.SMTP_HOST,
-    port: env.SMTP_PORT ?? 587,
-    secure: (env.SMTP_PORT ?? 587) === 465,
-    auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD },
-  });
+  const nodemailer = await import("nodemailer");
+  const transporter = nodemailer.createTransport(smtpTransportOptions());
 
   const who = recipientLogFields(payload.to);
   let info: { messageId?: string };
@@ -311,6 +337,8 @@ async function sendViaSMTP(payload: EmailPayload): Promise<SendEmailResult> {
     const message = redactEmailAddresses(err instanceof Error ? err.message : String(err));
     logger.error({ msg: "SMTP email failed", provider: "smtp", ...who, subject: payload.subject, errorMessage: message });
     throw new Error(`Email delivery failed: ${message}`);
+  } finally {
+    transporter.close();
   }
 
   const messageId = typeof info.messageId === "string" ? info.messageId : undefined;

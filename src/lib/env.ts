@@ -61,6 +61,12 @@ const envSchema = z.object({
   SMTP_PORT: z.coerce.number().optional(),
   SMTP_USER: z.string().optional(),
   SMTP_PASSWORD: z.string().optional(),
+  /**
+   * SMTP only. "true" (default): refuse to authenticate or send over a connection that was not upgraded to TLS (STARTTLS on 587/25,
+   * implicit TLS on 465), so a network attacker cannot strip STARTTLS and read the SMTP credentials. "false" exists only for a
+   * plaintext local relay in development (e.g. MailHog on localhost); production refuses to start with it.
+   */
+  SMTP_REQUIRE_TLS: z.enum(["true", "false"]).default("true"),
   EMAIL_FROM: z
     .string()
     .email()
@@ -166,6 +172,11 @@ function validateConditionalRequirements(parsed: Env, rawEnv: NodeJS.ProcessEnv)
   ) {
     problems.push(
       "EMAIL_PROVIDER=smtp requires SMTP_HOST, SMTP_USER, and SMTP_PASSWORD to all be set."
+    );
+  }
+  if (parsed.NODE_ENV === "production" && parsed.EMAIL_PROVIDER === "smtp" && parsed.SMTP_REQUIRE_TLS === "false") {
+    problems.push(
+      "SMTP_REQUIRE_TLS=false is not allowed in production: SMTP credentials and message content would be sent in clear text. Use a relay that supports STARTTLS (port 587) or implicit TLS (port 465)."
     );
   }
 

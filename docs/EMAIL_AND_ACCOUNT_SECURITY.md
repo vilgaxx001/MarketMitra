@@ -48,6 +48,26 @@ Other places that can reveal membership: team invites (visible only to workspace
 * Signup, forgot-password and the existing-account notice log the error **name** only (`errorName`).
 * `pino` redaction now also censors `to`, `email`, `recipient` and their one-level-nested forms, as defence in depth (`src/lib/log-redaction.ts`).
 
+## 3a. Providers: Resend (default) and SMTP
+
+`src/lib/email.ts` is a two-provider adapter selected by `EMAIL_PROVIDER`. Both SDKs are declared dependencies (`resend`, `nodemailer`) and are
+loaded lazily, only when their provider is selected. (Until this was fixed, `nodemailer` was imported but never declared, so SMTP could not work
+and every build warned `Module not found: Can't resolve 'nodemailer'`; `src/lib/__tests__/dependency-declarations.test.ts` now fails the test suite
+if any runtime import is not a declared dependency.)
+
+Rules that apply to **both** providers: the recipient must be exactly one plain mailbox (a comma/semicolon list, `"Name" <a@b>` or a line break is
+refused before any provider is contacted), the subject cannot carry a line break, and no log line contains the recipient address.
+
+SMTP specifics (`EMAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD`, optional `SMTP_PORT`, default 587):
+
+* **TLS is required.** 587/25 must upgrade with STARTTLS, 465 uses implicit TLS; certificates are verified, TLS 1.2 is the floor. Without this an
+  attacker who strips STARTTLS from the greeting would receive the SMTP credentials. `SMTP_REQUIRE_TLS=false` exists only for a plaintext local
+  relay in development and **production refuses to start with it**.
+* Connection, greeting and socket waits are bounded (10 s / 10 s / 20 s); local files and URLs can never become message content.
+* Tested against a real SMTP conversation (`email-smtp.test.ts`). **Not** verified: a successful STARTTLS handshake with a certificate-trusted relay,
+  delivery to a mailbox, and the SMTP path inside the production bundle. Verify these once against the real relay in staging before relying on SMTP.
+  (`scripts/ops/verify-resend-staging.ts` covers Resend only.)
+
 ## 4. Production checklist
 
 | Item | Setting |
@@ -56,7 +76,7 @@ Other places that can reveal membership: team invites (visible only to workspace
 | Shared rate-limit store | `REDIS_URL` (`redis://` or `rediss://`; app refuses to start otherwise) |
 | Redis outage behaviour | `RATE_LIMIT_ON_STORE_FAILURE=memory` (default) or `deny` |
 | Session / key-hash secret | `SESSION_SECRET` ≥ 32 chars (also keys rate-limit identifiers and the log reference) |
-| Mail provider | `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM` on a domain **verified in Resend** (SPF/DKIM) |
+| Mail provider | `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM` on a domain **verified in Resend** (SPF/DKIM); or `EMAIL_PROVIDER=smtp` + `SMTP_HOST/USER/PASSWORD` (TLS required, see 3a) |
 | Contact delivery | `CONTACT_INBOX_EMAIL` (without it submissions are accepted but nothing stores them; boot warns, each one logs `contact_form_not_delivered`) |
 | Public URL | `APP_URL` (used in the links inside mails) |
 

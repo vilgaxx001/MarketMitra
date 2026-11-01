@@ -21,7 +21,7 @@ const PROD_BASE: Record<string, string> = {
   REDIS_URL: "redis://redis.example.test:6379",
   TRUSTED_IP_HEADER: "cf-connecting-ip",
 };
-const MANAGED = ["TRUSTED_IP_HEADER", "TRUSTED_PROXY_HOPS", "REDIS_URL", "RATE_LIMIT_ALLOW_UNTRUSTED_CLIENT_IP", "RATE_LIMIT_ALLOW_MEMORY_STORE", "CONTACT_INBOX_EMAIL", "RATE_LIMIT_POLICY_JSON", "RATE_LIMIT_ON_STORE_FAILURE"];
+const MANAGED = ["TRUSTED_IP_HEADER", "TRUSTED_PROXY_HOPS", "REDIS_URL", "RATE_LIMIT_ALLOW_UNTRUSTED_CLIENT_IP", "RATE_LIMIT_ALLOW_MEMORY_STORE", "CONTACT_INBOX_EMAIL", "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_REQUIRE_TLS", "RATE_LIMIT_POLICY_JSON", "RATE_LIMIT_ON_STORE_FAILURE"];
 
 async function boot(over: Record<string, string | undefined> = {}) {
   vi.resetModules();
@@ -109,5 +109,27 @@ describe("contact inbox", () => {
   it("production warns (does not fail) when CONTACT_INBOX_EMAIL is unset: submissions are accepted but not delivered", async () => {
     await boot();
     expect(warn.mock.calls.flat().join("\n")).toMatch(/CONTACT_INBOX_EMAIL not set in production/);
+  });
+});
+
+describe("SMTP provider: TLS cannot be switched off in production", () => {
+  const SMTP = { EMAIL_PROVIDER: "smtp", RESEND_API_KEY: undefined, SMTP_HOST: "smtp.example.test", SMTP_PORT: "587", SMTP_USER: "apikey", SMTP_PASSWORD: "smtp-password-value" };
+  it("production with SMTP and the default (TLS required) boots", async () => {
+    const { env } = await boot(SMTP);
+    expect(env.EMAIL_PROVIDER).toBe("smtp");
+    expect(env.SMTP_REQUIRE_TLS).toBe("true");
+  });
+  it("production with SMTP_REQUIRE_TLS=false refuses to start", async () => {
+    await expect(boot({ ...SMTP, SMTP_REQUIRE_TLS: "false" })).rejects.toThrow(/SMTP_REQUIRE_TLS=false is not allowed in production/);
+  });
+  it("the flag only matters for SMTP: Resend ignores it", async () => {
+    await expect(boot({ SMTP_REQUIRE_TLS: "false" })).resolves.toBeTruthy();
+  });
+  it("development may use a plaintext local relay (SMTP_REQUIRE_TLS=false)", async () => {
+    const { env } = await boot({ ...SMTP, NODE_ENV: "development", SMTP_REQUIRE_TLS: "false" });
+    expect(env.SMTP_REQUIRE_TLS).toBe("false");
+  });
+  it("anything but true/false is rejected, not guessed", async () => {
+    await expect(boot({ ...SMTP, SMTP_REQUIRE_TLS: "maybe" })).rejects.toThrow();
   });
 });
