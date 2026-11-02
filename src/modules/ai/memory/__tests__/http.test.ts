@@ -7,6 +7,8 @@ import { describe, it, expect } from "vitest";
 import { readBoundedJson, MAX_MEMORY_REQUEST_BYTES as MAX } from "../http";
 
 const enc = new TextEncoder();
+/** What every real client sends; the reader now rejects a body without it (415) before reading a byte. */
+const JSON_CT = { "content-type": "application/json" };
 type Init = RequestInit & { duplex?: "half" };
 
 /** A JSON object whose UTF-8 byte length is exactly `bytes` (padding with trailing spaces). */
@@ -24,9 +26,9 @@ function requestFromChunks(chunks: Uint8Array[], headers: Record<string, string>
     },
     cancel() { onCancel?.(); },
   });
-  return new Request("http://x/api", { method: "POST", body: stream, headers, duplex: "half" } as Init);
+  return new Request("http://x/api", { method: "POST", body: stream, headers: { ...JSON_CT, ...headers }, duplex: "half" } as Init);
 }
-const bodyOf = (text: string, headers: Record<string, string> = {}) => new Request("http://x/api", { method: "POST", body: text, headers });
+const bodyOf = (text: string, headers: Record<string, string> = {}) => new Request("http://x/api", { method: "POST", body: text, headers: { ...JSON_CT, ...headers } });
 const status = (r: Awaited<ReturnType<typeof readBoundedJson>>) => (r.ok ? 200 : r.response.status);
 async function errorBody(r: Awaited<ReturnType<typeof readBoundedJson>>) { if (r.ok) throw new Error("expected failure"); return r.response.json(); }
 
@@ -100,7 +102,7 @@ describe("6. oversized streams are cut off before being fully buffered", () => {
       pull(c) { pulls++; if (pulls <= TOTAL_CHUNKS) c.enqueue(chunk); else c.close(); },
       cancel() { cancelled = true; },
     });
-    const req = new Request("http://x/api", { method: "POST", body: stream, duplex: "half" } as Init);
+    const req = new Request("http://x/api", { method: "POST", body: stream, headers: JSON_CT, duplex: "half" } as Init);
     const r = await readBoundedJson(req);
     expect(status(r)).toBe(400);
     expect(cancelled).toBe(true);
@@ -133,7 +135,7 @@ describe("7. malformed, missing and failing bodies are safe 400s", () => {
       start(c) { c.enqueue(enc.encode('{"a":')); },
       pull() { throw new Error("secret internal disk path /var/x"); },
     });
-    const r = await readBoundedJson(new Request("http://x/api", { method: "POST", body: stream, duplex: "half" } as Init));
+    const r = await readBoundedJson(new Request("http://x/api", { method: "POST", body: stream, headers: JSON_CT, duplex: "half" } as Init));
     expect(status(r)).toBe(400);
     expect(JSON.stringify(await errorBody(r))).not.toMatch(/secret|\/var/);
   });

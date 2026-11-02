@@ -21,18 +21,15 @@
  *     already reports it in the response `details` so the client can
  *     distinguish "not built yet" from "built but misconfigured" once
  *     the service layer exists.
- *   - Rate-limiting dependencies already declared in package.json
- *     (`@upstash/ratelimit`, `ioredis`) for when this route needs to
- *     defend against abuse from an unauthenticated public endpoint —
- *     NOT yet wired here; a real implementation must add rate limiting
- *     before calling any paid provider API on behalf of an anonymous
- *     visitor.
+ *   - Abuse protection is IN PLACE: a per-client-IP rate limit (src/lib/rate-limit, policy in docs/RATE_LIMITING.md) is
+ *     enforced before the body is read, and the body is size-bounded (BODY_LIMITS.publicForm). Both apply today even though
+ *     the route calls no provider; a real implementation must keep them, and should add a spend ceiling before calling any
+ *     paid provider API on behalf of an anonymous visitor.
  *
  * TO IMPLEMENT FOR REAL (Module 5):
  *   1. Build `src/modules/ai/providers/*` implementing the `AIProvider`
  *      interface and `provider.factory.ts` to resolve one.
- *   2. Add a rate limiter here keyed by IP (Upstash + the `ioredis`
- *      client already in package.json).
+ *   2. (Done) Rate limiter keyed by client IP; see above.
  *   3. Replace the `apiError("FEATURE_NOT_AVAILABLE", ...)` below with a
  *      real call through the factory, sanitize the returned HTML server
  *      side, and return `apiSuccess<DemoGenerateResponse>(...)`.
@@ -43,6 +40,8 @@
 import { z } from "zod";
 import { withApiHandler, apiError, apiValidationError } from "@/lib/api-response";
 import { isDefaultAIProviderConfigured } from "@/lib/env";
+import { readBoundedJson, BODY_LIMITS } from "@/lib/bounded-json";
+import { enforceIpLimit } from "@/lib/rate-limit";
 import {
   DEMO_OUTPUT_TYPES,
   DEMO_TONES,
@@ -65,8 +64,10 @@ const demoGenerateSchema = z.object({
 });
 
 export const POST = withApiHandler(async (req) => {
-  const body = await req.json();
-  const result = demoGenerateSchema.safeParse(body);
+  await enforceIpLimit(req, "demoGenerate");
+  const parsedBody = await readBoundedJson(req, BODY_LIMITS.publicForm);
+  if (!parsedBody.ok) return parsedBody.response;
+  const result = demoGenerateSchema.safeParse(parsedBody.data);
   if (!result.success) return apiValidationError(result.error);
 
   // Input is fully validated at this point — this is a real, working

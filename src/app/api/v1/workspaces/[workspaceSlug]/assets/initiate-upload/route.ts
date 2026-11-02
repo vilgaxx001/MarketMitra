@@ -4,6 +4,7 @@ import { requirePermission } from "@/modules/rbac";
 import { z } from "zod";
 import { initiateUploadSchema } from "@/modules/assets/validators";
 import { initiateUpload } from "@/modules/assets/service";
+import { readBoundedJson, BODY_LIMITS } from "@/lib/bounded-json";
 
 const schema = initiateUploadSchema.extend({ sha256Hash: z.string().length(64) });
 
@@ -12,7 +13,9 @@ export const POST = withApiHandler<{ workspaceSlug: string }>(async (req, { para
   const workspaceUser = await requireWorkspaceAccess(workspaceSlug);
   await requirePermission(workspaceUser, "asset:create");
 
-  const body = await req.json();
+  const parsedBody = await readBoundedJson(req, BODY_LIMITS.control);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body = parsedBody.data;
   const result = schema.safeParse(body);
   if (!result.success) return apiValidationError(result.error);
 

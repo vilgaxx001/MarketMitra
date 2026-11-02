@@ -23,6 +23,9 @@ AI_PROVIDER=openai
 OPENAI_API_KEY=sk-ci-placeholder-not-a-credential-000000
 STORAGE_PROVIDER=local
 REDIS_URL=${REDIS_URL}
+# The HTTP suite plays the trusted edge: it sends each simulated client address in x-real-ip. Without a trusted source the app
+# treats every client as one shared bucket (see docs/RATE_LIMITING.md). Default rate-limit policy, deny-on-Redis-failure not set.
+TRUSTED_IP_HEADER=x-real-ip
 NEXT_TELEMETRY_DISABLED=1
 ENV
 echo "wrote $out (placeholders only; mode 600)"

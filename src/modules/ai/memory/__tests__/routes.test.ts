@@ -108,13 +108,13 @@ describe("input validation at the route", () => {
     expect(bad.status).toBe(400);
     const big = await collection.POST(post(JSON.stringify({ ...valid, content: "a".repeat(20_000) }), true), ctx());
     expect(big.status).toBe(400);
-    const declared = new Request("http://x/api", { method: "POST", body: "{}", headers: { "content-length": "999999" } });
+    const declared = new Request("http://x/api", { method: "POST", body: "{}", headers: { "content-type": "application/json", "content-length": "999999" } });
     expect((await collection.POST(declared, ctx())).status).toBe(400);
   });
   it("both body-reading routes (POST collection, PATCH item) use the bounded byte reader: an oversized streamed body with no Content-Length is a 400 and never reaches validation or the service", async () => {
     const big = () => {
       const bytes = new TextEncoder().encode(JSON.stringify({ ...valid, content: "€".repeat(6000) })); // < 16384 chars, > 16384 bytes
-      return new Request("http://x/api", { method: "POST", body: new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } }), duplex: "half" } as RequestInit & { duplex: "half" });
+      return new Request("http://x/api", { method: "POST", body: new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } }), headers: { "content-type": "application/json" }, duplex: "half" } as RequestInit & { duplex: "half" });
     };
     const created = await collection.POST(big(), ctx());
     const patched = await item.PATCH(big(), ctx({ memoryId: MID }));

@@ -5,7 +5,7 @@
 
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { signupSchema, type SignupInput } from "@/modules/auth/validators";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,9 +17,9 @@ import { Eye, EyeOff, User, Mail, Lock } from "lucide-react";
 import { useState } from "react";
 
 export function SignupForm() {
-  const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [submittedTo, setSubmittedTo] = useState<string | null>(null);
 
   const {
     register,
@@ -44,9 +44,7 @@ export function SignupForm() {
       const json = await res.json();
 
       if (!res.ok) {
-        if (json.error?.code === "CONFLICT") {
-          setServerError("An account with this email already exists.");
-        } else if (json.error?.details) {
+        if (json.error?.details) {
           setServerError(json.error.details[0]?.message ?? json.error.message);
         } else {
           setServerError(json.error?.message ?? "Signup failed. Please try again.");
@@ -54,12 +52,31 @@ export function SignupForm() {
         return;
       }
 
-      toast.success("Account created! Check your email to verify your address.");
-      router.push("/dashboard");
+      // The server answers identically whether or not the address is already registered, so this screen must not claim
+      // "account created": it says what is true for both cases. The user signs in from here once the account exists.
+      toast.success("Check your email.");
+      setSubmittedTo(data.email);
     } catch {
       setServerError("Something went wrong. Please check your connection and try again.");
     }
   };
+
+  if (submittedTo) {
+    return (
+      <div className="space-y-4" role="status">
+        <Alert>
+          <AlertDescription>
+            Check <strong>{submittedTo}</strong>. If this address can be registered, we have sent it instructions. If you already
+            have an account, we have said so there.
+          </AlertDescription>
+        </Alert>
+        <p className="text-sm text-muted-foreground">
+          Your account is ready to use as soon as it is created, usually within a minute.{" "}
+          <Link href="/login" className="font-medium text-primary underline-offset-4 hover:underline">Log in</Link>
+        </p>
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} noValidate className="space-y-4">

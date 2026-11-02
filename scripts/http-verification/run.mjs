@@ -42,11 +42,17 @@ function check(name, ok, detail = "") {
 }
 const section = (t) => console.log(`\n== ${t}`);
 
+// The app under test runs with TRUSTED_IP_HEADER=x-real-ip (scripts/ci/write-env.sh), i.e. this script plays the trusted edge.
+// Every Client gets its OWN address, so the rate limits (src/lib/rate-limit) see each simulated user separately and the older
+// sections never share a counter. Sections that test the limits override it per request.
+let clientSeq = 0;
+// Run-derived second octet: a re-run against the SAME Redis (limit windows last up to an hour) does not meet the previous run's counters.
+const runOctet = 16 + (parseInt(Date.now().toString(36), 36) & 15);
 class Client {
-  constructor(label) { this.label = label; this.cookies = new Map(); }
+  constructor(label) { this.label = label; this.cookies = new Map(); const n = ++clientSeq; this.ip = `172.${runOctet}.${(n >> 8) & 255}.${n & 255}`; }
   header() { return [...this.cookies].map(([k, v]) => `${k}=${v}`).join("; "); }
   async call(method, p, body, { raw, headers, redirect } = {}) {
-    const h = { Origin: BASE, ...(headers ?? {}) };
+    const h = { Origin: BASE, "x-real-ip": this.ip, ...(headers ?? {}) };
     if (this.cookies.size) h.Cookie = this.header();
     let payload;
     if (raw !== undefined) payload = raw;
@@ -69,10 +75,18 @@ const PASSWORD = "Verify1234Pass";
 const run = Date.now().toString(36);
 const email = (l) => `http-verify-${l}-${run}@example.test`;
 
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+// Signup is account-enumeration safe: the server answers 202 with NO session and creates the account AFTER the response. A real
+// user then signs in; this helper does the same: POST signup, wait for the row to exist, log in once. `r` is the SIGNUP response,
+// `signupCookies` how many cookies it set (must be 0), `login` the sign-in response.
 async function signup(label) {
   const c = new Client(label);
   const r = await c.call("POST", "/api/v1/auth/signup", { name: `User ${label}`, email: email(label), password: PASSWORD, confirmPassword: PASSWORD, acceptTerms: true });
-  return { c, r };
+  const signupCookies = c.cookies.size;
+  let exists = false;
+  for (let i = 0; i < 120 && !exists; i++) { exists = (await sql.query(`select 1 from users where email=$1`, [email(label)])).rowCount > 0; if (!exists) await sleep(150); }
+  const login = exists ? await c.call("POST", "/api/v1/auth/login", { email: email(label), password: PASSWORD }) : null;
+  return { c, r, signupCookies, exists, login };
 }
 
 try {
@@ -92,11 +106,20 @@ try {
   }
 
   const A = await signup("a"), B = await signup("b"), M = await signup("m"), C = await signup("c");
-  check("signup (A) -> 201 and a session cookie is set", A.r.status === 201 && A.c.cookies.size > 0, `${A.r.status} ${A.r.text}`);
+  check("signup (A) -> 202 'check your email' with NO session cookie and no user object in the response", A.r.status === 202 && A.signupCookies === 0 && !/"user"|"id"|emailVerified/.test(A.r.text), `${A.r.status} cookies=${A.signupCookies} ${A.r.text}`);
+  check("the account is created after the response and the new user can sign in (200 + session cookie)", A.exists && A.login?.status === 200 && A.c.cookies.size > 0, `${A.login?.status} ${A.login?.text}`);
   check("signup response does not expose the password or its hash", !/passwordHash|Verify1234Pass/.test(A.r.text), A.r.text);
-  const dup = await new Client("dup").call("POST", "/api/v1/auth/signup", { name: "User a", email: email("a"), password: PASSWORD, confirmPassword: PASSWORD, acceptTerms: true });
-  check("duplicate email signup is rejected (4xx, not 500)", dup.status >= 400 && dup.status < 500, `${dup.status} ${dup.text}`);
-  const stored = (await sql.query(`select "passwordHash" h from users where email=$1`, [email("a")])).rows[0]?.h ?? "";
+  const storedBefore = (await sql.query(`select id, "passwordHash" h from users where email=$1`, [email("a")])).rows[0];
+  const dupClient = new Client("dup");
+  const dup = await dupClient.call("POST", "/api/v1/auth/signup", { name: "Mallory", email: email("a"), password: "Other1234Pass", confirmPassword: "Other1234Pass", acceptTerms: true });
+  check("ENUMERATION: signing up with an EXISTING address returns the same status, byte-identical body and no cookie as a new address", dup.status === A.r.status && dup.text === A.r.text && dupClient.cookies.size === 0 && !(dup.headers.getSetCookie?.() ?? []).length, `${dup.status} ${dup.text} | ${A.r.status} ${A.r.text}`);
+  check("ENUMERATION: the two responses carry the same headers (apart from per-request ones)", ["content-type", "cache-control"].every((h) => dup.headers.get(h) === A.r.headers.get(h)), `${dup.headers.get("cache-control")} vs ${A.r.headers.get("cache-control")}`);
+  await sleep(2_500); // the deferred work (hash + lookup + notice) has had time to run
+  const afterDup = (await sql.query(`select id, "passwordHash" h, (select count(*) from users where email=$1) n from users where email=$1`, [email("a")])).rows[0];
+  check("an existing account is untouched by a signup attempt: still ONE row, same id, same password hash (no takeover, no duplicate)", afterDup?.n === "1" && afterDup.id === storedBefore.id && afterDup.h === storedBefore.h, JSON.stringify({ n: afterDup?.n }));
+  const wrongPw = await new Client("dup2").call("POST", "/api/v1/auth/login", { email: email("a"), password: "Other1234Pass" });
+  check("the attacker's password does NOT work on the existing account", wrongPw.status === 401, `${wrongPw.status}`);
+  const stored = storedBefore.h ?? "";
   check("password is stored hashed (not the plaintext)", stored.length > 20 && !stored.includes(PASSWORD), stored.slice(0, 7) + "…");
 
   r = await A.c.call("GET", "/api/v1/auth/me");
@@ -129,7 +152,7 @@ try {
   check("a LIVE session on /login is still redirected away to /dashboard (existing behaviour preserved)", chain.hops[0] === "/login:307" && chain.hops[1]?.startsWith("/dashboard"), chain.hops.join(" -> "));
   r = await A.c.call("GET", "/pricing", undefined, { redirect: "manual" });
   check("a signed-in visitor still sees the marketing pricing page (200)", r.status === 200, r.status);
-  const pw = new Client("pwreset"); await pw.call("POST", "/api/v1/auth/signup", { name: "Pw", email: email("pw"), password: PASSWORD, confirmPassword: PASSWORD, acceptTerms: true });
+  const PWU = await signup("pw"); const pw = PWU.c;
   const pwToken = new Map(pw.cookies); const pwUser = (await sql.query(`select id from users where email=$1`, [email("pw")])).rows[0].id;
   await sql.query(`delete from sessions where "userId"=$1`, [pwUser]); // what a password change / reset does server-side (repo.deleteAllUserSessions)
   const pwCopy = new Client("pwcopy"); pwCopy.cookies = pwToken; r = await pwCopy.call("GET", "/api/v1/auth/me");
@@ -386,15 +409,134 @@ try {
 
   if (redis) {
     section("Rate limiting through the real HTTP path (real Redis)");
-    const key = `ai:ratelimit:${ws}`; const ttl = await redis.ttl(key), cnt = Number(await redis.get(key));
-    check("counter key exists in Redis with a bounded TTL after the execute calls", cnt >= 1 && ttl > 0 && ttl <= 60, `count=${cnt} ttl=${ttl}`);
+    const key = `rl:v1:ai:ws:${ws}`; const ttl = await redis.pttl(key), cnt = await redis.zcard(key), kind = await redis.type(key);
+    check("the AI counter exists in Redis as a sliding-window log (zset) with a bounded TTL after the execute calls", kind === "zset" && cnt >= 1 && ttl > 0 && ttl <= 60_000, `type=${kind} entries=${cnt} pttl=${ttl}`);
     await redis.del(key);
     const statuses = []; for (let i = 0; i < 24; i++) statuses.push((await exec(A.c)).status);
     const limited = statuses.filter((s) => s === 429).length, passed = statuses.filter((s) => s === 502).length;
     console.log(`   24 sequential calls: ${passed}x502 ${limited}x429 other=${statuses.filter((s) => s !== 502 && s !== 429).join(",")}`);
     check("exactly 20 calls pass the limiter per window, the rest -> 429 RATE_LIMITED", passed === 20 && limited === 4, JSON.stringify(statuses));
-    r = await exec(A.c); check("429 body is the standard envelope", r.status === 429 && code(r) === "RATE_LIMITED", `${r.status} ${r.text}`);
+    r = await exec(A.c); check("429 body is the standard envelope with an integer Retry-After inside the 60 s window", r.status === 429 && code(r) === "RATE_LIMITED" && Number.isInteger(Number(r.headers.get("retry-after"))) && Number(r.headers.get("retry-after")) >= 1 && Number(r.headers.get("retry-after")) <= 60, `${r.status} retry-after=${r.headers.get("retry-after")} ${r.text}`);
     r = await exec(B.c, WB.slug); check("another workspace is not limited by Alpha's window", r.status === 502, `${r.status} ${r.text.slice(0, 120)}`);
+  }
+
+  section("Public-endpoint rate limits, body bounds and forgot-password deferral (real server, real Redis, real PostgreSQL)");
+  {
+    // Addresses derive from the run id so a re-run against the SAME Redis (windows last up to an hour) never meets stale counters.
+    const net = parseInt(run, 36) % 65_000;
+    const ipN = (n) => `10.${(net >> 8) & 255}.${net & 255}.${n}`;
+    const at = (ip, extra = {}) => ({ headers: { "x-real-ip": ip, ...extra } });
+    const LOGIN = "/api/v1/auth/login";
+    const fresh = () => new Client("rl");
+    const hasSession = (res) => (res.headers.getSetCookie?.() ?? []).some((c) => c.startsWith(`${COOKIE_NAME}=`));
+
+    // --- per-IP limit: decided before validation, immune to a forged x-forwarded-for
+    const st = [];
+    for (let i = 0; i < 61; i++) st.push((await fresh().call("POST", LOGIN, {}, at(ipN(11), { "x-forwarded-for": `9.9.9.${i}` }))).status);
+    check("login per-IP limit (failed attempts): requests 1-60 pass the limiter ({} -> 400), the 61st -> 429, although each request forged a different x-forwarded-for", st.slice(0, 60).every((x) => x === 400) && st[60] === 429, st.join(","));
+    r = await fresh().call("POST", LOGIN, {}, at(ipN(11)));
+    const retry = Number(r.headers.get("retry-after"));
+    check("429 contract: RATE_LIMITED envelope, integer Retry-After within the 15-minute window, Cache-Control no-store, nothing about accounts", r.status === 429 && code(r) === "RATE_LIMITED" && Number.isInteger(retry) && retry >= 1 && retry <= 900 && /no-store/.test(r.headers.get("cache-control") ?? "") && !/account|password|e-?mail/i.test(r.json?.error?.message ?? ""), `${r.status} retry-after=${r.headers.get("retry-after")} ${r.text}`);
+    r = await fresh().call("POST", LOGIN, {}, at(ipN(12)));
+    check("a different client address is unaffected by that block", r.status === 400, r.status);
+
+    // --- per account + IP: brute-force control that cannot be turned into a lockout of the owner
+    const V = await signup("rl-victim");
+    check("victim account created for the lockout checks", V.r.status === 202 && V.exists && V.login?.status === 200, `${V.r.status} ${V.r.text} login=${V.login?.status}`);
+    const bad = (em, ip) => fresh().call("POST", LOGIN, { email: em, password: "Wrong1234Pass" }, at(ip));
+    const good = (ip, extra) => fresh().call("POST", LOGIN, { email: email("rl-victim"), password: PASSWORD }, at(ip, extra));
+    let seq = []; for (let i = 0; i < 6; i++) seq.push((await bad(email("rl-victim"), ipN(21))).status);
+    check("login per account+IP: 5 wrong passwords -> 401, the 6th -> 429", seq.join() === "401,401,401,401,401,429", seq.join());
+    r = await good(ipN(21));
+    check("while blocked, even the CORRECT password from that address is refused with 429 and no session", r.status === 429 && !hasSession(r), `${r.status} ${r.text}`);
+    r = await good(ipN(22));
+    check("the real owner on ANOTHER address is not locked out by that attacker (200 + session cookie)", r.status === 200 && hasSession(r), `${r.status} ${r.text}`);
+    seq = []; for (let i = 0; i < 6; i++) seq.push((await bad(email("rl-nobody"), ipN(23))).status);
+    check("a NON-EXISTENT account is throttled identically (5 x 401, then 429)", seq.join() === "401,401,401,401,401,429", seq.join());
+    const realBlocked = await bad(email("rl-victim"), ipN(21)); const ghostBlocked = await bad(email("rl-nobody"), ipN(23));
+    check("the 429 for an existing and a non-existent account is byte-identical (no enumeration through the limiter)", realBlocked.status === 429 && ghostBlocked.status === 429 && realBlocked.text === ghostBlocked.text, `${realBlocked.text} | ${ghostBlocked.text}`);
+    const par = await Promise.all(Array.from({ length: 40 }, () => bad(email("rl-victim"), ipN(24))));
+    const n401 = par.filter((x) => x.status === 401).length, n429 = par.filter((x) => x.status === 429).length;
+    check("40 PARALLEL wrong-password logins (same account, same address): exactly 5 reach the password check", n401 === 5 && n429 === 35, `401=${n401} 429=${n429} other=${par.filter((x) => x.status !== 401 && x.status !== 429).map((x) => x.status).join(",")}`);
+    r = await good(ipN(25), { "x-forwarded-for": "6.6.6.6" });
+    const sessRow = await sql.query(`select s."ipAddress" as ip from sessions s join users u on u.id = s."userId" where u.email = $1 order by s."createdAt" desc limit 1`, [email("rl-victim")]);
+    check("the session records the trusted address (x-real-ip), never the client's own x-forwarded-for", r.status === 200 && sessRow.rows[0]?.ip === ipN(25), `${r.status} stored=${sessRow.rows[0]?.ip}`);
+
+    // --- shared addresses (CGNAT / office): successful logins do not consume the per-IP flood budget
+    {
+      const shared = ipN(60); const outcomes = [];
+      for (let i = 0; i < 65; i++) outcomes.push((await fresh().call("POST", LOGIN, { email: email("rl-victim"), password: PASSWORD }, at(shared))).status);
+      check("shared address: 65 SUCCESSFUL logins from one IP (limit 60 failures) are all accepted - the flood counter counts failures only", outcomes.every((x) => x === 200), [...new Set(outcomes)].join(","));
+      const failed = []; for (let i = 0; i < 61; i++) failed.push((await fresh().call("POST", LOGIN, { email: email(`rl-stuff-${i}`), password: "Wrong1234Pass" }, at(shared))).status);
+      check("shared address: after those successes, credential stuffing (61 FAILED logins across different accounts) is still stopped at the 61st with 429", failed.slice(0, 60).every((x) => x === 401) && failed[60] === 429, [...new Set(failed.slice(0, 60))].join(",") + " / " + failed[60]);
+    }
+
+    // --- every other public endpoint, per IP (counted before validation)
+    for (const [pth, n, max] of [["/api/v1/auth/signup", 53, 10], ["/api/v1/auth/forgot-password", 54, 10], ["/api/v1/auth/reset-password", 55, 30], ["/api/v1/auth/verify-email", 56, 30], ["/api/v1/contact", 57, 10], ["/api/v1/ai/demo-generate", 58, 20]]) {
+      const got = []; for (let i = 0; i <= max; i++) got.push((await fresh().call("POST", pth, {}, at(ipN(n)))).status);
+      check(`${pth}: ${max} requests per IP per window reach validation (400), request ${max + 1} -> 429`, got.slice(0, max).every((x) => x === 400) && got[max] === 429, got.join(","));
+    }
+
+    // --- Redis hygiene
+    if (redis) {
+      const keys = await redis.keys("rl:v1:*");
+      const ttls = await Promise.all(keys.map((k) => redis.pttl(k)));
+      check("Redis: rate-limit keys exist and every one has a bounded expiry (none stranded without a TTL)", keys.length > 0 && ttls.every((t) => t > 0 && t <= 30 * 86_400_000), `keys=${keys.length} badTtl=${ttls.filter((t) => !(t > 0 && t <= 30 * 86_400_000)).length}`);
+      const kinds = await Promise.all(keys.map((k) => redis.type(k)));
+      const counters = keys.filter((k, i) => kinds[i] === "zset");
+      const sizes = await Promise.all(counters.map((k) => redis.zcard(k)));
+      check("Redis: counters are sliding-window logs (zset), flags are plain keys, and no counter holds more entries than the largest configured limit", counters.length > 0 && keys.every((k, i) => (k.includes(":known:") ? kinds[i] === "string" : kinds[i] === "zset")) && sizes.every((n) => n <= 600), `types=${[...new Set(kinds)].join(",")} max=${Math.max(0, ...sizes)}`);
+      check("Redis: no rate-limit key contains an e-mail address", !keys.some((k) => /@|http-verify|example\.test/i.test(k)), keys.filter((k) => /@|http-verify|example\.test/i.test(k)).slice(0, 2).join(","));
+    }
+
+    // --- request bodies on the real server
+    const J = { "Content-Type": "application/json" };
+    const pad = (bytes) => { const base = JSON.stringify({ email: "a@example.test", password: "" }); return JSON.stringify({ email: "a@example.test", password: "p".repeat(bytes - Buffer.byteLength(base)) }); };
+    check("test helper builds an exactly 8192-byte body", Buffer.byteLength(pad(8192)) === 8192, Buffer.byteLength(pad(8192)));
+    r = await fresh().call("POST", LOGIN, undefined, { raw: pad(8192), headers: { ...J, "x-real-ip": ipN(31) } });
+    check("login: a body of EXACTLY the 8 KiB limit is accepted by the reader (reaches the credential check: 401)", r.status === 401, `${r.status} ${r.text.slice(0, 120)}`);
+    r = await fresh().call("POST", LOGIN, undefined, { raw: pad(8193), headers: { ...J, "x-real-ip": ipN(31) } });
+    check("login: ONE byte over the limit -> 400 'too large'", r.status === 400 && /too large/i.test(r.text), `${r.status} ${r.text.slice(0, 120)}`);
+    const chunks = new TextEncoder().encode(pad(20_000));
+    const chunked = new ReadableStream({ start(c) { for (let i = 0; i < chunks.length; i += 1024) c.enqueue(chunks.slice(i, i + 1024)); c.close(); } });
+    r = await fresh().call("POST", LOGIN, undefined, { raw: chunked, headers: { ...J, "x-real-ip": ipN(31) } });
+    check("login: an oversized CHUNKED body with no Content-Length -> 400 'too large'", r.status === 400 && /too large/i.test(r.text), `${r.status} ${r.text.slice(0, 120)}`);
+    r = await fresh().call("POST", LOGIN, undefined, { raw: "x".repeat(6_000_000), headers: { ...J, "x-real-ip": ipN(31) } });
+    check("login: a 6 MB body (above the 4 MiB framework buffer) -> 400 'too large', not a crash or a truncated-JSON error", r.status === 400 && /too large/i.test(r.text), `${r.status} ${r.text.slice(0, 120)}`);
+    r = await fresh().call("POST", LOGIN, undefined, { raw: pad(100), headers: { "Content-Type": "text/plain", "x-real-ip": ipN(31) } });
+    check("login: Content-Type text/plain -> 415 UNSUPPORTED_MEDIA_TYPE", r.status === 415 && code(r) === "UNSUPPORTED_MEDIA_TYPE", `${r.status} ${r.text}`);
+    const noType = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(pad(100))); c.close(); } });
+    r = await fresh().call("POST", LOGIN, undefined, { raw: noType, headers: { "x-real-ip": ipN(31) } });
+    check("login: no Content-Type at all -> 415", r.status === 415 && code(r) === "UNSUPPORTED_MEDIA_TYPE", `${r.status} ${r.text}`);
+    r = await fresh().call("POST", LOGIN, undefined, { raw: pad(100), headers: { ...J, "Content-Encoding": "gzip", "x-real-ip": ipN(31) } });
+    check("login: Content-Encoding gzip -> 415 (compressed bodies are never expanded)", r.status === 415, `${r.status} ${r.text}`);
+    const bigControl = JSON.stringify({ name: "x".repeat(20_000) });
+    r = await V.c.call("POST", "/api/v1/workspaces", undefined, { raw: bigControl, headers: J });
+    check("authenticated POST /workspaces: a 20 KB body (control limit 16 KiB) -> 400 'too large'", r.status === 400 && /too large/i.test(r.text), `${r.status} ${r.text.slice(0, 120)}`);
+    r = await fresh().call("POST", "/api/v1/workspaces", undefined, { raw: bigControl, headers: J });
+    check("the same oversized body WITHOUT a session -> 401: authentication is still decided before the body is read", r.status === 401, `${r.status} ${r.text.slice(0, 120)}`);
+    r = await anon.call("GET", "/api/v1/auth/me"); check("server still healthy after the oversized and malformed bodies", r.status === 401, r.status);
+
+    // --- forgot-password: no existence oracle, and the deferred work really runs in the production server
+    const fp = (em, ip) => fresh().call("POST", "/api/v1/auth/forgot-password", { email: em }, at(ip));
+    // Issuing a token deletes the user's other unused ones, so the row COUNT stays 1; the hash of the live row is what changes.
+    const tokenHash = async () => (await sql.query(`select t."tokenHash" as h from password_reset_tokens t join users u on u.id = t."userId" where u.email = $1 order by t."createdAt" desc limit 1`, [email("rl-victim")])).rows[0]?.h ?? null;
+    const waitFor = async (pred, ms = 15_000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await pred()) return true; await new Promise((res) => setTimeout(res, 250)); } return false; };
+    const h0 = await tokenHash();
+    const fe = await fp(email("rl-victim"), ipN(41)); const fu = await fp(email("rl-ghost"), ipN(42));
+    check("forgot-password: an existing and an unknown address get the same 200 and body (the e-mail provider is unusable here, which used to make the existing case fail)", fe.status === 200 && fu.status === 200 && fe.text === fu.text, `${fe.status} ${fe.text} | ${fu.status} ${fu.text}`);
+    check("forgot-password: the deferred work ran in the production server (a reset token appeared after the response)", await waitFor(async () => (await tokenHash()) !== h0), `hash before=${h0 === null ? "none" : "set"}`);
+    // per-address limit is 3 per hour: request 1 (above) + 2 more issue tokens, the 4th and 5th must send nothing
+    let prev = await tokenHash(); const issued = []; const same = [];
+    for (let i = 0; i < 4; i++) {
+      const x = await fp(email("rl-victim"), ipN(43 + i));
+      same.push(x.status === 200 && x.text === fe.text);
+      if (i < 2) { issued.push(await waitFor(async () => (await tokenHash()) !== prev)); prev = await tokenHash(); }
+    }
+    check("forgot-password: requests beyond the per-address limit get the SAME 200 and body as the allowed ones", same.every(Boolean), same.join());
+    check("forgot-password: requests 2 and 3 for the address issued new tokens", issued.every(Boolean), issued.join());
+    await new Promise((res) => setTimeout(res, 3_000));
+    check("forgot-password: requests 4 and 5 (over the per-address limit) issued NOTHING", (await tokenHash()) === prev, "token changed after the limit was exceeded");
   }
 } catch (e) {
   check("script completed without an unexpected exception", false, e?.stack ?? e);

@@ -9,10 +9,13 @@ import { requireAuth } from "@/lib/middleware/require-auth";
 import { step1Schema } from "@/modules/onboarding/validators";
 import { createWorkspace } from "@/modules/workspace/service";
 import { advanceStep } from "@/modules/onboarding/service";
+import { readBoundedJson, BODY_LIMITS } from "@/lib/bounded-json";
 
 export const POST = withApiHandler(async (req) => {
   const session = await requireAuth();
-  const body = await req.json();
+  const parsedBody = await readBoundedJson(req, BODY_LIMITS.profile);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body = parsedBody.data;
   const result = step1Schema.safeParse(body);
   if (!result.success) return apiValidationError(result.error);
 

@@ -32,7 +32,7 @@ const req = (): AICoreRequest => ({ requestId: "r1", workspaceId: "ws_A", actorU
 let rec: Recorder;
 beforeEach(() => {
   __resetHealthStateForTests(); __clearTestProviderOverrides(); rec = new Recorder(); __setTestProviderOverride("openai", rec);
-  vi.mocked(checkAIExecutionRateLimit).mockReset().mockResolvedValue({ allowed: true, configured: false });
+  vi.mocked(checkAIExecutionRateLimit).mockReset().mockResolvedValue({ allowed: true });
   vi.mocked(requireBusinessAccess).mockReset();
 });
 

@@ -20,6 +20,7 @@
 
 import pino from "pino";
 import { env, isProduction } from "@/lib/env";
+import { LOG_REDACTION } from "@/lib/log-redaction";
 
 export const logger = pino({
   level: env.LOG_LEVEL,
@@ -39,22 +40,7 @@ export const logger = pino({
     env: env.NODE_ENV,
     app: env.APP_NAME,
   },
-  redact: {
-    // Defense in depth — never let secrets/PII leak into log output even
-    // if a caller accidentally logs a full object containing them.
-    paths: [
-      "*.password",
-      "*.passwordHash",
-      "*.token",
-      "*.tokenHash",
-      "*.secret",
-      "*.apiKey",
-      "*.authorization",
-      "req.headers.authorization",
-      "req.headers.cookie",
-    ],
-    censor: "[REDACTED]",
-  },
+  redact: LOG_REDACTION,
 });
 
 /**

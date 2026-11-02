@@ -34,7 +34,8 @@ export async function executeAICoreRequest(request: AICoreRequest, workspaceUser
     // Before the rate limiter: a mismatched request must not consume another workspace's quota.
     assertRequestWorkspaceMatches(request, workspaceUser);
     const rateLimit = await checkAIExecutionRateLimit(request.workspaceId);
-    if (!rateLimit.allowed) throw new AICoreError("RATE_LIMIT_EXCEEDED_INTERNAL", "AI execution rate limit exceeded for this workspace.", { fromProvider: false });
+    if (rateLimit.unavailable) throw new AICoreError("RATE_LIMITER_UNAVAILABLE", "AI execution is paused because the rate limiter is unavailable.", { fromProvider: false, retryAfterSeconds: rateLimit.retryAfterSeconds });
+    if (!rateLimit.allowed) throw new AICoreError("RATE_LIMIT_EXCEEDED_INTERNAL", "AI execution rate limit exceeded for this workspace.", { fromProvider: false, retryAfterSeconds: rateLimit.retryAfterSeconds });
     const validationError = validateMessages(request.messages);
     if (validationError) throw new AICoreError("INVALID_REQUEST", validationError, { fromProvider: false });
     const executionContext = await resolveExecutionContext(request, workspaceUser);

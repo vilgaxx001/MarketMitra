@@ -4,10 +4,14 @@
 import { withApiHandler, apiSuccess, apiValidationError } from "@/lib/api-response";
 import { verifyEmailSchema } from "@/modules/auth/validators";
 import * as authService from "@/modules/auth/service";
+import { readBoundedJson, BODY_LIMITS } from "@/lib/bounded-json";
+import { enforceIpLimit } from "@/lib/rate-limit";
 
 export const POST = withApiHandler(async (req) => {
-  const body = await req.json();
-  const result = verifyEmailSchema.safeParse(body);
+  await enforceIpLimit(req, "verifyEmail");
+  const parsedBody = await readBoundedJson(req, BODY_LIMITS.auth);
+  if (!parsedBody.ok) return parsedBody.response;
+  const result = verifyEmailSchema.safeParse(parsedBody.data);
   if (!result.success) return apiValidationError(result.error);
 
   await authService.verifyEmail(result.data.token);

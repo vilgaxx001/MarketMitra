@@ -52,7 +52,7 @@ configured (see table below) — they will never silently fake success.
 | Feature | Required env vars | Where to get them |
 |---|---|---|
 | Auth, sessions, workspaces, RBAC | `DATABASE_URL`, `SESSION_SECRET` | Generate locally |
-| Email verification, password reset | `RESEND_API_KEY` (or `SMTP_*`) | resend.com → API Keys |
+| Email verification, password reset | `RESEND_API_KEY` (or `EMAIL_PROVIDER=smtp` with `SMTP_*`) | resend.com → API Keys |
 | AI content generation | `AI_PROVIDER` + matching `*_API_KEY` | See table below |
 | Logo / brand asset uploads | `S3_BUCKET_NAME`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | AWS Console → S3 + IAM |
 | India payments | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | dashboard.razorpay.com → Settings → API Keys / Webhooks |

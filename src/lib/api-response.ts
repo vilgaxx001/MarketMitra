@@ -46,6 +46,8 @@ export type ApiErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "RATE_LIMITED"
+  | "SERVICE_UNAVAILABLE"
+  | "UNSUPPORTED_MEDIA_TYPE"
   | "PLAN_LIMIT_REACHED"
   | "FEATURE_NOT_AVAILABLE"
   | "PROVIDER_ERROR"
@@ -67,6 +69,8 @@ const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
   NOT_FOUND: 404,
   CONFLICT: 409,
   RATE_LIMITED: 429,
+  SERVICE_UNAVAILABLE: 503,
+  UNSUPPORTED_MEDIA_TYPE: 415,
   PLAN_LIMIT_REACHED: 402,
   FEATURE_NOT_AVAILABLE: 403,
   PROVIDER_ERROR: 502,
@@ -86,11 +90,12 @@ export function apiSuccess<T>(data: T, meta?: ApiSuccess<T>["meta"], status = 20
 export function apiError(
   code: ApiErrorCode,
   message: string,
-  details?: unknown
+  details?: unknown,
+  init?: { headers?: Record<string, string> }
 ): NextResponse<ApiError> {
   return NextResponse.json(
     { error: { code, message, details } },
-    { status: STATUS_BY_CODE[code] }
+    { status: STATUS_BY_CODE[code], headers: init?.headers }
   );
 }
 
@@ -119,6 +124,30 @@ export class ApiException extends Error {
     this.name = "ApiException";
     this.code = code;
     this.details = details;
+  }
+}
+
+/**
+ * Thrown by the rate limiter (src/lib/rate-limit). The message is identical for every limit (per IP, per account, per
+ * token, lockout) so a response never says which limit tripped or whether an account exists; `retryAfterSeconds`
+ * becomes the Retry-After header.
+ */
+export class RateLimitedException extends ApiException {
+  retryAfterSeconds: number;
+  constructor(retryAfterSeconds: number) {
+    super("RATE_LIMITED", "Too many requests. Please try again later.");
+    this.name = "RateLimitedException";
+    this.retryAfterSeconds = Math.max(1, Math.ceil(retryAfterSeconds));
+  }
+}
+
+/** Thrown when protection cannot be applied and the operator chose fail-closed (RATE_LIMIT_ON_STORE_FAILURE=deny). */
+export class ServiceUnavailableException extends ApiException {
+  retryAfterSeconds: number;
+  constructor(retryAfterSeconds = 5) {
+    super("SERVICE_UNAVAILABLE", "The service is temporarily unavailable. Please try again shortly.");
+    this.name = "ServiceUnavailableException";
+    this.retryAfterSeconds = Math.max(1, Math.ceil(retryAfterSeconds));
   }
 }
 
@@ -178,6 +207,12 @@ async function handleRouteError(err: unknown): Promise<NextResponse> {
   // Lazy import to avoid a circular dependency between this file and logger
   // consumers that themselves construct API responses.
   const { logger } = await import("@/lib/logger");
+
+  if (err instanceof RateLimitedException || err instanceof ServiceUnavailableException) {
+    return apiError(err.code, err.message, undefined, {
+      headers: { "Retry-After": String(err.retryAfterSeconds), "Cache-Control": "no-store" },
+    });
+  }
 
   if (err instanceof ApiException) {
     return apiError(err.code, err.message, err.details);

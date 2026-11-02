@@ -34,7 +34,7 @@ import { executeAICoreRequest } from "@/modules/ai/core/orchestrator";
 // implicitly via the "configured: false fails open" code path already
 // covered by every other test here running with no REDIS_URL set).
 vi.mock("@/modules/ai/core/rate-limit", () => ({
-  checkAIExecutionRateLimit: vi.fn().mockResolvedValue({ allowed: true, configured: false }),
+  checkAIExecutionRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 import { checkAIExecutionRateLimit } from "@/modules/ai/core/rate-limit";
 
@@ -107,7 +107,7 @@ describe("Orchestrator (executeAICoreRequest)", () => {
     vi.mocked(requireBusinessAccess).mockReset();
     vi.mocked(resolveBusinessContext).mockReset();
     vi.mocked(checkAIExecutionRateLimit).mockReset();
-    vi.mocked(checkAIExecutionRateLimit).mockResolvedValue({ allowed: true, configured: false });
+    vi.mocked(checkAIExecutionRateLimit).mockResolvedValue({ allowed: true });
   });
   afterEach(() => {
     __clearTestProviderOverrides();
@@ -227,7 +227,7 @@ describe("Orchestrator (executeAICoreRequest)", () => {
   });
 
   it("11. rate-limit rejection prevents any provider execution", async () => {
-    vi.mocked(checkAIExecutionRateLimit).mockResolvedValue({ allowed: false, configured: true, remaining: 0, limit: 20 });
+    vi.mocked(checkAIExecutionRateLimit).mockResolvedValue({ allowed: false, remaining: 0, limit: 20 });
     await expect(executeAICoreRequest(baseRequest(), workspaceUser)).rejects.toMatchObject({ code: "RATE_LIMIT_EXCEEDED_INTERNAL" });
     expect(fakeOpenAI.calls.length).toBe(0);
   });

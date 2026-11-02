@@ -6,6 +6,7 @@ import { requireWorkspaceAccess } from "@/lib/middleware/require-auth";
 import { requirePermission } from "@/modules/rbac";
 import { updateWorkspaceSchema } from "@/modules/workspace/validators";
 import { getWorkspaceBySlug, updateWorkspace } from "@/modules/workspace/service";
+import { readBoundedJson, BODY_LIMITS } from "@/lib/bounded-json";
 
 export const GET = withApiHandler<{ workspaceSlug: string }>(async (_req, { params }) => {
   const { workspaceSlug } = await params;
@@ -21,7 +22,9 @@ export const PATCH = withApiHandler<{ workspaceSlug: string }>(async (req, { par
   const workspaceUser = await requireWorkspaceAccess(workspaceSlug);
   await requirePermission(workspaceUser, "workspace:edit");
 
-  const body = await req.json();
+  const parsedBody = await readBoundedJson(req, BODY_LIMITS.control);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body = parsedBody.data;
   const result = updateWorkspaceSchema.safeParse(body);
   if (!result.success) return apiValidationError(result.error);
 
