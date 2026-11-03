@@ -52,6 +52,16 @@ expect "policy fails on a new advisory" 1 node scripts/ci/audit-policy.mjs $E/np
 expect "policy fails on a production vulnerability" 1 node scripts/ci/audit-policy.mjs "$tmp/prod.json" $E/npm-audit-all.json scripts/ci/audit-deferred.json package-lock.json
 expect "policy fails when the audit did not run (empty JSON)" 1 node scripts/ci/audit-policy.mjs "$tmp/empty.json" $E/npm-audit-all.json scripts/ci/audit-deferred.json package-lock.json
 
+echo "# assert-build-log.mjs (real build logs in scripts/ci/fixtures/build-logs)"
+B=scripts/ci/fixtures/build-logs
+expect "build-log guard passes the real clean CI build log (it contains normal warnings)" 0 node scripts/ci/assert-build-log.mjs $B/clean-real-ci.txt
+expect "build-log guard fails the real log of the build that shipped the nodemailer defect" 1 node scripts/ci/assert-build-log.mjs $B/nodemailer-warning-real-ci.txt
+expect "build-log guard fails a real unresolved dynamic import and missing export" 1 node scripts/ci/assert-build-log.mjs $B/unresolved-dynamic-and-missing-export-real.txt
+expect "build-log guard fails a real unresolved static import" 1 node scripts/ci/assert-build-log.mjs $B/unresolved-static-error-real.txt
+: > "$tmp/empty.log"
+expect "build-log guard fails closed on an empty log" 1 node scripts/ci/assert-build-log.mjs "$tmp/empty.log"
+expect "build-log guard fails closed on a missing log" 2 node scripts/ci/assert-build-log.mjs "$tmp/does-not-exist.log"
+
 echo "# verify-action-pins.mjs (offline format check; upstream resolution needs network and is run separately)"
 expect "committed workflow: every action pinned by full SHA with tag comment" 0 node scripts/ci/verify-action-pins.mjs --offline
 mkdir -p "$tmp/unpinned/.github/workflows" "$tmp/unpinned/scripts/ci"

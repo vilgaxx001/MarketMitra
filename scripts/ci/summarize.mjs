@@ -7,7 +7,7 @@ import path from "node:path";
 export const REQUIRED_GATES = [
   "env-guard", "npm-ci", "harness-npm-ci", "db-create", "prisma-version", "prisma-validate", "prisma-generate",
   "genuine-client-static", "prisma-migrate-deploy", "genuine-client-runtime", "prisma-drift", "existing-install-rehearsal",
-  "tsc", "lint", "vitest-with-redis", "build", "app-start", "http-suite", "audit-policy",
+  "tsc", "lint", "vitest-with-redis", "build", "build-resolution", "app-start", "http-suite", "audit-policy",
 ];
 
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } };

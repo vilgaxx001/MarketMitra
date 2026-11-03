@@ -1,0 +1,28 @@
+   ▲ Next.js 15.5.28
+   - Experiments (use with caution):
+     · serverActions
+     · middlewareClientMaxBodySize: "4mb"
+
+   Creating an optimized production build ...
+ ⚠ Compiled with warnings in 37.1s
+
+./src/app/api/zz-probe/route.ts
+Module not found: Can't resolve './zz-not-here' in '/home/runner/work/MarketMitra/MarketMitra/src/app/api/zz-probe'
+
+Import trace for requested module:
+./src/app/api/zz-probe/route.ts
+
+./src/app/api/zz-probe/route.ts
+Attempted import error: 'absent' is not exported from '@/lib/zz-probe-lib' (imported as 'absent').
+
+Import trace for requested module:
+./src/app/api/zz-probe/route.ts
+
+./src/app/api/zz-probe/route.ts
+Attempted import error: 'absent' is not exported from '@/lib/zz-probe-lib' (imported as 'absent').
+
+Import trace for requested module:
+./src/app/api/zz-probe/route.ts
+
+ ✓ Compiled successfully in 57s
+   Linting and checking validity of types ...

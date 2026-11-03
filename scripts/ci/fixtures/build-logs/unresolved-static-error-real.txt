@@ -1,0 +1,15 @@
+   ▲ Next.js 15.5.28
+   - Experiments (use with caution):
+     · serverActions
+     · middlewareClientMaxBodySize: "4mb"
+
+   Creating an optimized production build ...
+Failed to compile.
+
+./src/app/api/zz-probe/route.ts
+Module not found: Can't resolve './zz-static-missing'
+
+https://nextjs.org/docs/messages/module-not-found
+
+
+> Build failed because of webpack errors

@@ -13,8 +13,12 @@ name: pre5c-release-gate
 
 on:
   workflow_dispatch: {}
+  # Runs on every pull request that targets the repository's DEFAULT branch (ci/pre5c-gate), so the gate that branch protection
+  # requires is produced automatically. (This used to say `main`, which does not exist, so the gate only ever ran by hand.)
+  # Not triggered: a PR whose base is another branch (stacked PRs) and a change of a PR's base branch; use workflow_dispatch on the
+  # branch, or push to it, in those cases. If the default branch is ever renamed, change this list and src/lib/__tests__/workflow-config.test.ts together.
   pull_request:
-    branches: [main]
+    branches: [ci/pre5c-gate]
 
 # Least privilege: read-only token, and checkout does not persist it.
 permissions:
@@ -178,6 +182,12 @@ jobs:
       - name: B12 npm run build (prisma generate + next build, production env)
         run: |
           scripts/ci/gate.sh build required -- 'set -a; . "$RUNNER_TEMP/mm-ci/app.env"; set +a; npm run build'
+
+      # `next build` reports an import it cannot resolve (e.g. a package that is imported but not installed) as a WARNING and still
+      # exits 0 and prints "Compiled successfully". This gate fails the run on such diagnostics. It reads logs/build.log, the log the
+      # build gate above wrote (gate.sh writes logs/<gate id>.log), so it checks the exact output of this run's build.
+      - name: B13 Build log guard (no unresolved module or import diagnostics)
+        run: scripts/ci/gate.sh build-resolution required -- 'node scripts/ci/assert-build-log.mjs "$CI_EVIDENCE_DIR/logs/build.log"'
 
       # ---- C. Genuine HTTP tests ---------------------------------------------------------------------------------------
       - name: C1 Start the production server (NODE_OPTIONS unset and verified)
