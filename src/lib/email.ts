@@ -345,3 +345,13 @@ async function sendViaSMTP(payload: EmailPayload): Promise<SendEmailResult> {
   logger.info({ msg: "Email sent via SMTP", provider: "smtp", messageId, ...who, subject: payload.subject });
   return { messageId };
 }
+
+/** PROBE (throwaway branch, never merged): an import that cannot be resolved, inside try/catch, like the original nodemailer defect. */
+export async function probeUnresolvedImport(): Promise<unknown> {
+  try {
+    // @ts-expect-error probe: deliberately unresolvable module
+    return await import("./zz-module-that-does-not-exist");
+  } catch {
+    return null;
+  }
+}
