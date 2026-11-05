@@ -1,0 +1,144 @@
+### gate: build (required)
+$ set -a; . "$RUNNER_TEMP/mm-ci/app.env"; set +a; npm run build
+
+> marketmitra@1.0.0 build
+> prisma generate && next build
+
+Prisma schema loaded from prisma/schema.prisma
+
+✔ Generated Prisma Client (v6.2.1) to ./node_modules/@prisma/client in 379ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Help us improve the Prisma ORM for everyone. Share your feedback in a short 2-min survey: https://pris.ly/orm/survey/release-5-22
+
+⚠ No build cache found. Please configure build caching for faster rebuilds. Read more: https://nextjs.org/docs/messages/no-cache
+   ▲ Next.js 15.5.28
+   - Experiments (use with caution):
+     · serverActions
+     · middlewareClientMaxBodySize: "4mb"
+
+   Creating an optimized production build ...
+ ⚠ Compiled with warnings in 12.9s
+
+./src/lib/email.ts
+Module not found: Can't resolve 'nodemailer' in '/home/runner/work/MarketMitra/MarketMitra/src/lib'
+
+Import trace for requested module:
+./src/lib/email.ts
+./src/app/api/v1/contact/route.ts
+
+ ✓ Compiled successfully in 21.0s
+   Linting and checking validity of types ...
+   Collecting page data ...
+[env] WARNING: Running in production with no Razorpay or Stripe keys configured. Billing endpoints will reject all checkout attempts until configured.
+[env] WARNING: CONTACT_INBOX_EMAIL not set in production. Contact-form submissions are accepted but nothing stores or delivers them (personal data is deliberately not logged). Set it before launch.
+[env] WARNING: SENTRY_DSN not set in production. Errors will only be logged locally, not reported to monitoring.
+[env] WARNING: Running in production with no Razorpay or Stripe keys configured. Billing endpoints will reject all checkout attempts until configured.
+[env] WARNING: CONTACT_INBOX_EMAIL not set in production. Contact-form submissions are accepted but nothing stores or delivers them (personal data is deliberately not logged). Set it before launch.
+[env] WARNING: SENTRY_DSN not set in production. Errors will only be logged locally, not reported to monitoring.
+[env] WARNING: Running in production with no Razorpay or Stripe keys configured. Billing endpoints will reject all checkout attempts until configured.
+[env] WARNING: CONTACT_INBOX_EMAIL not set in production. Contact-form submissions are accepted but nothing stores or delivers them (personal data is deliberately not logged). Set it before launch.
+[env] WARNING: SENTRY_DSN not set in production. Errors will only be logged locally, not reported to monitoring.
+   Generating static pages (0/35) ...
+[env] WARNING: Running in production with no Razorpay or Stripe keys configured. Billing endpoints will reject all checkout attempts until configured.
+[env] WARNING: CONTACT_INBOX_EMAIL not set in production. Contact-form submissions are accepted but nothing stores or delivers them (personal data is deliberately not logged). Set it before launch.
+[env] WARNING: SENTRY_DSN not set in production. Errors will only be logged locally, not reported to monitoring.
+[env] WARNING: Running in production with no Razorpay or Stripe keys configured. Billing endpoints will reject all checkout attempts until configured.
+[env] WARNING: CONTACT_INBOX_EMAIL not set in production. Contact-form submissions are accepted but nothing stores or delivers them (personal data is deliberately not logged). Set it before launch.
+[env] WARNING: SENTRY_DSN not set in production. Errors will only be logged locally, not reported to monitoring.
+   Generating static pages (8/35) 
+   Generating static pages (17/35) 
+   Generating static pages (26/35) 
+ ✓ Generating static pages (35/35)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                                                                         Size  First Load JS
+┌ ƒ /                                                                                             2.6 kB         126 kB
+├ ○ /_not-found                                                                                     1 kB         104 kB
+├ ƒ /[workspaceSlug]/activity                                                                    1.48 kB         112 kB
+├ ƒ /[workspaceSlug]/businesses                                                                  1.49 kB         116 kB
+├ ƒ /[workspaceSlug]/businesses/[businessId]                                                     18.5 kB         206 kB
+├ ƒ /[workspaceSlug]/businesses/new                                                              3.17 kB         150 kB
+├ ƒ /[workspaceSlug]/dashboard                                                                   1.49 kB         116 kB
+├ ƒ /[workspaceSlug]/onboarding                                                                  6.59 kB         191 kB
+├ ƒ /[workspaceSlug]/settings                                                                    3.75 kB         171 kB
+├ ƒ /[workspaceSlug]/team                                                                        4.75 kB         199 kB
+├ ƒ /api/v1/ai/demo-generate                                                                       253 B         103 kB
+├ ƒ /api/v1/auth/forgot-password                                                                   253 B         103 kB
+├ ƒ /api/v1/auth/login                                                                             253 B         103 kB
+├ ƒ /api/v1/auth/logout                                                                            253 B         103 kB
+├ ƒ /api/v1/auth/me                                                                                253 B         103 kB
+├ ƒ /api/v1/auth/resend-verification                                                               253 B         103 kB
+├ ƒ /api/v1/auth/reset-password                                                                    253 B         103 kB
+├ ƒ /api/v1/auth/signup                                                                            253 B         103 kB
+├ ƒ /api/v1/auth/verify-email                                                                      253 B         103 kB
+├ ƒ /api/v1/contact                                                                                253 B         103 kB
+├ ƒ /api/v1/invites/accept                                                                         253 B         103 kB
+├ ƒ /api/v1/onboarding/start                                                                       253 B         103 kB
+├ ƒ /api/v1/workspaces                                                                             253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]                                                             253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/activity                                                    253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/ai/execute                                                  253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/archive                                                     253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/assets                                                      253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/assets/[assetId]/archive                                    253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/assets/confirm-upload                                       253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/assets/initiate-upload                                      253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses                                                  253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]                                     253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/ai-memories                         253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/ai-memories/[memoryId]              253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/ai-memories/[memoryId]/archive      253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/ai-memories/[memoryId]/restore      253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/ai-preferences                      253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/archive                             253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/audience                            253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/audience/[segmentId]                253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/audience/[segmentId]/set-primary    253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/brand                               253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/context                             253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/restore                             253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/businesses/[businessId]/switch-active                       253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/leave                                                       253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/onboarding                                                  253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/onboarding/complete                                         253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/onboarding/step                                             253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/restore                                                     253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/team/invites                                                253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/team/invites/[inviteId]/resend                              253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/team/invites/[inviteId]/revoke                              253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/team/members                                                253 B         103 kB
+├ ƒ /api/v1/workspaces/[workspaceSlug]/team/members/[userId]                                       253 B         103 kB
+├ ƒ /contact                                                                                     4.14 kB         115 kB
+├ ƒ /dashboard                                                                                   1.49 kB         116 kB
+├ ƒ /demo                                                                                        5.21 kB         116 kB
+├ ƒ /features                                                                                    1.64 kB         116 kB
+├ ƒ /forgot-password                                                                             4.29 kB         154 kB
+├ ƒ /help                                                                                          178 B         106 kB
+├ ƒ /invite/[token]                                                                              2.25 kB         113 kB
+├ ƒ /login                                                                                       5.93 kB         156 kB
+├ ○ /manifest.webmanifest                                                                          253 B         103 kB
+├ ƒ /onboarding                                                                                  3.94 kB         150 kB
+├ ƒ /pricing                                                                                       181 B         123 kB
+├ ƒ /privacy                                                                                       178 B         106 kB
+├ ƒ /refund-policy                                                                                 178 B         106 kB
+├ ƒ /reset-password                                                                               4.8 kB         151 kB
+├ ○ /robots.txt                                                                                    253 B         103 kB
+├ ƒ /signup                                                                                       7.9 kB         167 kB
+├ ○ /sitemap.xml                                                                                   253 B         103 kB
+├ ƒ /terms                                                                                         178 B         106 kB
+└ ƒ /verify-email                                                                                4.04 kB         125 kB
++ First Load JS shared by all                                                                     103 kB
+  ├ chunks/1255-dc3ddf72a1dc71a7.js                                                              46.6 kB
+  ├ chunks/4bd1b696-f785427dddbba9fb.js                                                          54.2 kB
+  └ other shared chunks (total)                                                                  2.07 kB
+
+
+ƒ Middleware                                                                                     39.9 kB
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+### exit: 0
